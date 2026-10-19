@@ -30,6 +30,12 @@ class BboxPublisher:
                       session=metadata["session"], sequence=metadata["sequence"],
                       capture_ns=metadata["capture_ns"],
                       bbox=None if bbox is None else dict(zip(("x", "y", "width", "height"), bbox, strict=True)))
+        if metadata.get('version') == 2:
+            from bullet_msgs.flight import validate_source
+            source = validate_source(metadata.get('source'))
+            if metadata['capture_ns'] != source['measurement_us'] * 1000:
+                raise ValueError('bbox source/capture timestamp mismatch')
+            packet.update(schema_version=2, source=source)
         try:
             self.validator.validate(packet)
         except ValidationError as error:

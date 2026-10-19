@@ -1,0 +1,211 @@
+"""Sensor-only, deterministic takeoff/settle/LOS mission; sockets live in runtime."""
+from dataclasses import asdict
+from math import isclose, radians
+from uuid import uuid4
+
+from bullet_msgs.flight import validate_config, validate_feedback, COMMAND_LIFETIME_US
+from los_tracking import (CameraCalibration, AltitudeHeadingHold, AttitudeSample, BarometerSample,
+                          LosNavigator, NavigationInput, RcChannels, State, TargetObservation)
+from los_tracking.geometry import euler, wrap
+
+
+TAKEOFF_HEIGHT_M = 20.0
+HOVER_DURATION_S = 3.0
+TARGET_TIMEOUT_S = 5.0
+TAKEOFF_TIMEOUT_S = 60.0
+ALTITUDE_TOLERANCE_M = 0.25
+VERTICAL_SPEED_TOLERANCE_M_S = 0.2
+ATTITUDE_TOLERANCE_RAD = radians(5)
+FEEDBACK_TIMEOUT_S = 0.1
+DISARMED_AETR = RcChannels(1500, 1500, 1000, 1500)
+
+
+class Mission:
+    def __init__(self, config, *, app_id=None):
+        self.config = config
+        self.app_id = app_id or uuid4().hex
+        self.platform = self.feedback = None
+        self.sequence = 0
+        self.identity = None
+        self.phase, self.reason = 'READY', 'waiting_platform'
+        self.diagnostics = {}
+        self._reset()
+
+    def _reset(self):
+        self.hold = AltitudeHeadingHold(self.config)
+        self.navigator = LosNavigator(self.config)
+        self.datum = self.goal = None
+        self.started_sim = self.settled_sim = self.hover_completed_sim = self.hover_completed_us = None
+        self.last_step = -1
+        self.last_input = NavigationInput()
+        self.nav_result = None
+        self.arm_sequence = None
+        self.running_seen = False
+        self.relative_altitude = self.vertical_speed = None
+
+    def configure(self, platform):
+        validate_config(platform)
+        c, v = self.config.camera, self.config.vehicle
+        expected = dict(mass_kg=v.mass_kg, gravity_m_s2=v.gravity_m_s2, max_thrust_n=v.max_thrust_n,
+                        rc_angle_scale_rad=v.rc_angle_scale_rad, rc_yaw_rate_scale_rad_s=v.rc_yaw_rate_scale_rad_s,
+                        physics_hz=240, feedback_hz=120, command_hz=100)
+        if any(not isclose(platform[k], value, rel_tol=1e-6) for k, value in expected.items()):
+            raise ValueError('platform/control profile mismatch')
+        if platform['aetr_channels'] != [1, 2, 3, 4] or (platform['arm_channel'], platform['mode_channel']) != (5, 6):
+            raise ValueError('unsupported RC mapping')
+        camera = platform['camera']
+        advertised = CameraCalibration.from_horizontal_fov(camera['width_px'], camera['height_px'], radians(camera['fov_x_deg']))
+        if any(not isclose(getattr(c, k), getattr(advertised, k), rel_tol=1e-8) for k in ('width_px', 'height_px', 'fx_px', 'fy_px', 'cx_px', 'cy_px')) or c.camera_to_body_xyzw != advertised.camera_to_body_xyzw:
+            raise ValueError('camera calibration mismatch')
+        self.platform = platform
+
+    def observe(self, feedback):
+        validate_feedback(feedback)
+        if self.platform is None:
+            return
+        source = feedback['source']
+        if source['physics_id'] != self.platform['physics_id'] or source['stream_id'] != self.platform['stream_id']:
+            return
+        if self.feedback is not None and source['measurement_us'] < self.feedback['source']['measurement_us']:
+            return
+        identity = (source['physics_id'], source['episode_id'], source['stream_id'])
+        if identity != self.identity:
+            self._reset()
+            self.identity = identity
+            self.phase, self.reason = 'READY', 'ready'
+        if source['step_index'] < self.last_step:
+            return
+        # State can change while the frozen source sample remains identical.
+        self.feedback = feedback
+        if source['step_index'] == self.last_step:
+            return
+        self.last_step = source['step_index']
+        timestamp = source['measurement_us'] / 1e6
+        attitude = AttitudeSample(source['stream_id'], source['step_index'], timestamp, tuple(feedback['orientation_xyzw']))
+        barometer = (None if feedback['barometer_altitude_m'] is None else
+                     BarometerSample(source['stream_id'], source['step_index'], timestamp, feedback['barometer_altitude_m']))
+        self.last_input = NavigationInput(attitude=attitude, barometer=barometer)
+        self.hold.observe(self.last_input)
+        if self.datum is None and barometer is not None:
+            self.datum = barometer.altitude_m
+            self.goal = self.datum + TAKEOFF_HEIGHT_M
+
+    def fail(self, reason):
+        self.phase, self.reason = 'FAULT', reason
+
+    def tick(self, *, now_s, detection=None):
+        if self.platform is None or self.feedback is None:
+            return None
+        f, source = self.feedback, self.feedback['source']
+        now_us = int(now_s * 1e6)
+        active = False
+        armed = False
+        command = DISARMED_AETR
+        lifetime_us = COMMAND_LIFETIME_US
+        if f['state'] == 'running':
+            if not self.running_seen:
+                self.running_seen = True
+                self.phase, self.reason = 'SENSOR_WARMUP', 'warming_sensors'
+                self.started_sim = source['simulation_time_s']
+            if f['owner_id'] != self.app_id:
+                self.fail('foreign_owner')
+            elif not 0 <= now_s - source['measurement_us'] / 1e6 <= FEEDBACK_TIMEOUT_S:
+                self.fail('feedback_stale')
+            if self.phase != 'FAULT':
+                active = True
+                sim = source['simulation_time_s']
+                if self.phase == 'SENSOR_WARMUP' and self.hold.ready(now_s):
+                    self.phase, self.reason = 'ARMING', 'waiting_applied_arm'
+                    self.arm_sequence = self.sequence + 1
+                if self.phase == 'ARMING':
+                    armed = True
+                    if f['armed'] and f['mode'] == 'angle' and f['last_applied_sequence'] >= self.arm_sequence:
+                        self.phase, self.reason = 'TAKEOFF', 'climbing'
+                if self.phase in ('TAKEOFF', 'HOVER', 'WAIT_TARGET', 'LOS_ACQUIRE', 'LOS_APPROACH'):
+                    armed = True
+                    if not self.hold.ready(now_s):
+                        self.fail('sensors_stale')
+                    elif self.phase.startswith('LOS_'):
+                        target = self._target(detection, now_s)
+                        result = self.navigator.update(NavigationInput(attitude=self.last_input.attitude,
+                            barometer=self.last_input.barometer, target=target), now_s=now_s, enabled=True)
+                        self.nav_result = result
+                        self.diagnostics = asdict(result.diagnostics)
+                        if result.diagnostics.altitude_m is not None:
+                            self.relative_altitude = result.diagnostics.altitude_m - self.datum
+                        self.vertical_speed = result.diagnostics.vertical_speed_m_s
+                        if not result.usable or result.state == State.FAULT:
+                            self.fail('los_' + result.reason)
+                        else:
+                            command = result.command
+                            lifetime_us = min(lifetime_us, int(result.valid_until_s * 1e6) - now_us)
+                            self.phase = 'LOS_APPROACH' if result.state == State.TRACK else 'LOS_ACQUIRE'
+                            self.reason = result.reason
+                    else:
+                        command = self.hold.command(now_s=now_s, target_altitude_m=self.goal)
+                        altitude, vz = self.hold.estimate(now_s)
+                        self.relative_altitude, self.vertical_speed = altitude - self.datum, vz
+                        self.diagnostics = dict(self.hold.control.last_diagnostics)
+                        if self.phase in ('TAKEOFF', 'HOVER'):
+                            roll, pitch, yaw = euler(self.last_input.attitude.orientation_xyzw)
+                            settled = (abs(altitude - self.goal) <= ALTITUDE_TOLERANCE_M
+                                       and abs(vz) <= VERTICAL_SPEED_TOLERANCE_M_S
+                                       and max(abs(roll), abs(pitch), abs(wrap(yaw - self.hold.heading_rad))) <= ATTITUDE_TOLERANCE_RAD)
+                            if not settled:
+                                self.settled_sim = None
+                                self.phase, self.reason = 'TAKEOFF', 'climbing_or_settling'
+                            else:
+                                self.phase, self.reason = 'HOVER', 'settling'
+                                if self.settled_sim is None:
+                                    self.settled_sim = sim
+                                if sim - self.settled_sim >= HOVER_DURATION_S:
+                                    self.phase, self.reason = 'WAIT_TARGET', 'waiting_post_hover_bbox'
+                                    self.hover_completed_sim, self.hover_completed_us = sim, now_us
+                            if sim - self.started_sim >= TAKEOFF_TIMEOUT_S:
+                                self.fail('takeoff_timeout')
+                        if self.phase == 'WAIT_TARGET':
+                            target = self._target(detection, now_s)
+                            if target is not None and target.bbox is not None:
+                                self.navigator.reset(handoff=self.hold.handoff(now_s=now_s, target_altitude_m=self.goal))
+                                self.phase, self.reason = 'LOS_ACQUIRE', 'acquiring'
+                            elif sim - self.hover_completed_sim >= TARGET_TIMEOUT_S:
+                                self.fail('target_timeout')
+                if self.phase in ('SENSOR_WARMUP', 'ARMING') and sim - self.started_sim >= TAKEOFF_TIMEOUT_S:
+                    self.fail('warmup_or_arm_timeout')
+        else:
+            if self.phase != 'FAULT':
+                self.phase, self.reason = 'READY', 'ready'
+        if self.phase == 'FAULT':
+            active, armed, command = False, False, DISARMED_AETR
+        if lifetime_us <= 0:
+            self.fail('command_expired')
+            active, armed, command, lifetime_us = False, False, DISARMED_AETR, COMMAND_LIFETIME_US
+        channels = [*command.as_tuple(), 2000 if armed else 1000, 2000, *([1000] * 12)]
+        self.sequence += 1
+        return dict(schema_version=1, physics_id=source['physics_id'], episode_id=source['episode_id'], app_id=self.app_id,
+                    sequence=self.sequence, issued_us=now_us, valid_until_us=now_us + lifetime_us, active=active, channels=channels)
+
+    def _target(self, detection, now_s):
+        if detection is None or self.hover_completed_us is None:
+            return None
+        metadata, bbox = detection
+        source = metadata.get('source')
+        if (source is None or (source['physics_id'], source['episode_id'], source['stream_id']) != self.identity
+                or source['measurement_us'] <= self.hover_completed_us
+                or not 0 <= now_s - source['measurement_us'] / 1e6 <= self.config.tuning.max_image_age_s):
+            return None
+        return TargetObservation(source['stream_id'], metadata['sequence'], source['measurement_us'] / 1e6, bbox)
+
+    def status(self, now_s):
+        if self.feedback is None:
+            return None
+        s = self.feedback['source']
+        sim = s['simulation_time_s']
+        return dict(schema_version=1, physics_id=s['physics_id'], episode_id=s['episode_id'], app_id=self.app_id,
+                    sequence=self.sequence, measurement_us=int(now_s * 1e6), simulation_time_s=sim,
+                    phase=self.phase, reason=self.reason, relative_altitude_m=self.relative_altitude,
+                    vertical_speed_m_s=self.vertical_speed,
+                    hover_remaining_s=max(0., HOVER_DURATION_S - (0 if self.settled_sim is None else sim - self.settled_sim)),
+                    target_remaining_s=max(0., TARGET_TIMEOUT_S - (0 if self.hover_completed_sim is None else sim - self.hover_completed_sim)),
+                    navigator_state=None if self.nav_result is None else self.nav_result.state.value,
+                    diagnostics=self.diagnostics)

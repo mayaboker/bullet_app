@@ -85,3 +85,62 @@ BGR array and returns `(x, y, width, height)` or `None`, preserving the input.
 It selects the largest red contour using HSV hue 0–10 or 170–180, saturation
 >=100, value >=80, 3×3 opening, contour area >=4 and width/height >=3 pixels.
 This replaces the former `los_tracking.detect_red_box` import.
+
+## App-owned flight mission
+
+The workspace **Bullet: Physics + render + app** and **Bullet: Run all** tasks now
+run the external-RC physics example and the mission-enabled app. Start physics,
+app and Godot, wait for `Mission READY`, then press Start in Godot. Start is
+rejected by physics until fresh disarmed app readiness frames arrive.
+
+```bash
+# bullet_drone terminal
+uv run --locked --all-packages --all-extras --all-groups python -m examples.external_rc.main \
+  --render-config ../bullet_render/configs/physics.json
+# bullet_app terminal
+uv run --locked --all-packages --all-extras --all-groups bullet-app \
+  --transport-config ../bullet_render/configs/transport.json \
+  --mission-config ../los_tracking/examples/bullet_profile.json --debug
+```
+
+Each Start creates a new episode and runs `SENSOR_WARMUP → ARMING → TAKEOFF →
+HOVER → WAIT_TARGET → LOS_ACQUIRE → LOS_APPROACH`. The app first sends disarmed
+Angle frames so grounded physics produces sensor samples, then waits for applied
+arming confirmation. It climbs 20 m above the initial barometer reading with a
+1 m/s vertical reference limit. Hover requires altitude error <=0.25 m,
+|vertical speed| <=0.2 m/s and roll/pitch/heading errors <=5 degrees continuously
+for 3 simulation seconds; deviations restart the countdown. Takeoff/settling has
+a 60 simulation second deadline. After hover, only a bbox captured after hover
+completion can start LOS; no fresh target within 5 simulation seconds freezes
+the episode. LOS faults, stale sensors, withdrawn intent and expired commands
+also freeze it. Start/Reset creates fresh state; no automatic running takeover
+is allowed after an app restart. No collision inference or landing is included.
+
+The controller receives barometer altitude and explicitly **ideal simulator
+attitude**, with no XY position or velocity feedback. This is altitude/heading
+hold, so wind or bias can cause horizontal drift. The LOS library receives the
+hold filter state, bounded attitude history, heading, reference angles/vertical
+speed and thrust integral through its public `ControlHandoff`. Camera calibration
+and thrust/RC/rate settings must match the advertised physics platform.
+
+The mission thread owns feedback, control, bbox and status sockets at 100 Hz.
+A separate latest-frame worker owns image sockets/SHM and detection. The main
+thread displays debug frames; GUI delays cannot block RC publication. Omitting
+`--mission-config` preserves detector-only operation, also available as the
+**Bullet: Detector only** task. **Bullet: Position flight** retains the square.
+
+Transport ports: physics feedback/config/pose 5555, images 5556, Godot lifecycle
+5557, bbox/mission diagnostics 5558, app RC 5559. RC uses all 18 integer PWM
+channels, an episode owner and monotonic sequence, with validity <=100 ms
+(shorter for LOS). Physics steps at 240 Hz and checks expiry before every step;
+feedback publishes at 120 Hz. Sensor/image freshness and expiry use the same
+host's monotonic clock; mission durations use simulation time. Each feedback and
+stamped pose reuse one source identity and measurement timestamp. Image v2
+`capture_ns` equals that source's `measurement_us * 1000`, independent of render
+arrival/GPU latency. Legacy image v1 is detector-only, not mission eligible.
+
+MCAP records intent, applied feedback, platform config, mission diagnostics,
+poses, bboxes and images using the render recorder profile. PlotJuggler may
+subscribe to multiple ports; use `source.simulation_time_s` for feedback and
+`simulation_time_s` for mission plots. Bearing, LOS rates and TTC appear under
+mission `diagnostics`. Requested RC and applied acknowledgements are separate.

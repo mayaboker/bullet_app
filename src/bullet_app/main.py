@@ -32,6 +32,7 @@ def main(argv=None):
     parser.add_argument("--topic", default="camera/front/image")
     parser.add_argument("--debug", action="store_true", help="Show camera frames and target bounding box")
     parser.add_argument("--bbox-endpoint", default="tcp://127.0.0.1:5558", help="Loopback TCP endpoint to bind for bbox results")
+    parser.add_argument("--mission-config", type=Path, help="Enable app-owned takeoff/hover/LOS using this navigator profile")
     args = parser.parse_args(argv)
     receiver = publisher = None
     window_open = False
@@ -40,6 +41,9 @@ def main(argv=None):
         transport = load_transport(args.transport_config)
         if args.bbox_endpoint in transport.values():
             raise ValueError("bbox endpoint must differ from transport endpoints")
+        if args.mission_config is not None:
+            from .runtime import run_mission
+            return run_mission(args, transport)
         publisher = BboxPublisher(args.bbox_endpoint)
         receiver = ImageReceiver(transport["image_endpoint"], args.topic)
         image = np.zeros((480, 640, 3), dtype=np.uint8)

@@ -1,0 +1,155 @@
+"""Mission transitions and a real sensor-only PyBullet takeoff."""
+from pathlib import Path
+from math import radians
+
+import pytest
+from bullet_app.mission import Mission
+from los_tracking import NavigatorConfig
+
+
+ROOT = Path(__file__).resolve().parents[2]
+PROFILE = ROOT / 'los_tracking/examples/bullet_profile.json'
+
+
+def platform(config):
+    v, c = config.vehicle, config.camera
+    return dict(schema_version=1, physics_id='physics', stream_id='stream',
+                mass_kg=v.mass_kg, gravity_m_s2=v.gravity_m_s2, max_thrust_n=v.max_thrust_n,
+                rc_angle_scale_rad=v.rc_angle_scale_rad, rc_yaw_rate_scale_rad_s=v.rc_yaw_rate_scale_rad_s,
+                aetr_channels=[1, 2, 3, 4], arm_channel=5, mode_channel=6,
+                camera=dict(width_px=c.width_px, height_px=c.height_px, fov_x_deg=90.),
+                attitude_model='ideal', physics_hz=240, feedback_hz=120, command_hz=100)
+
+
+def feedback(step, now, altitude, *, state='running', episode='episode', armed=False, applied=0):
+    return dict(schema_version=1, source=dict(physics_id='physics', episode_id=episode, stream_id='stream',
+                step_index=step, simulation_time_s=step / 240, measurement_us=int(now * 1e6)),
+                barometer_altitude_m=altitude, orientation_xyzw=[0, 0, 0, 1], armed=armed, mode='angle',
+                last_applied_sequence=applied, owner_id='app' if state == 'running' else None,
+                state=state, reason='test')
+
+
+def mission():
+    config = NavigatorConfig.from_json(PROFILE)
+    m = Mission(config, app_id='app')
+    m.configure(platform(config))
+    return m
+
+
+def test_ready_warmup_arm_confirmation_and_stale_freeze():
+    m = mission()
+    m.observe(feedback(0, 1000., 4., state='stopped'))
+    assert not m.tick(now_s=1000.)['active']
+    for step in range(1, 40):
+        now = 1000 + step / 240
+        m.observe(feedback(step, now, 4.))
+        rc = m.tick(now_s=now)
+        assert rc['channels'][2] == 1000
+    assert m.phase == 'ARMING'
+    assert rc['channels'][4:6] == [2000, 2000]
+    assert m.goal == 24.
+    m.observe(feedback(40, 1000 + 40 / 240, 4., armed=True, applied=rc['sequence']))
+    assert m.tick(now_s=1000 + 40 / 240)['channels'][2] > 1000
+    assert m.phase == 'TAKEOFF'
+    rc = m.tick(now_s=1001.)
+    assert not rc['active'] and rc['channels'][4] == 1000
+    assert m.reason == 'feedback_stale'
+
+
+def test_profile_mismatch_refuses_readiness():
+    m = mission()
+    config = platform(m.config)
+    config['mass_kg'] = 2
+    with pytest.raises(ValueError, match='mismatch'):
+        m.configure(config)
+
+
+def test_sensor_only_physics_takeoff_hover_target_timeout():
+    from bullet_drone.config import DroneSettings, SimulationConfig, SimulationSettings
+    from bullet_drone.commands import RcInput
+    from bullet_drone.controllers import InternalControlSettings, PidSettings
+    from bullet_drone.simulation import RcSimulation
+    m = mission()
+    inner = InternalControlSettings((4., 4., 4.), (2., 2., 2.),
+                                    (PidSettings(kp=.05, ki=0., kd=0., output_limit=.1, integral_limit=0.),) * 3)
+    sim = RcSimulation(SimulationConfig(SimulationSettings(1 / 240, 20000, (0., 0., -9.81), gui=False),
+                                        DroneSettings(1., (0., 0., .015))), inner)
+    phases = set()
+    rc = None
+    try:
+        obs = sim.reset()
+        m.observe(feedback(0, 1000., obs.sensors.barometer.altitude_m))
+        for step in range(1, 16000):
+            now = 1000 + (step - 1) / 240
+            if rc is None or step % 12 in (0, 2, 5, 7, 10):
+                rc = m.tick(now_s=now)
+                phases.add(m.phase)
+            if m.phase == 'FAULT':
+                break
+            obs = sim.step(RcInput(tuple(rc['channels'])))
+            if step % 2 == 0:
+                # Only noisy sensor altitude and explicitly ideal attitude cross the boundary.
+                f = feedback(step, 1000 + step / 240, obs.sensors.barometer.altitude_m,
+                             armed=rc['channels'][4] >= 1500, applied=rc['sequence'])
+                f['orientation_xyzw'] = list(obs.ground_truth.orientation_xyzw)
+                m.observe(f)
+        assert {'SENSOR_WARMUP', 'ARMING', 'TAKEOFF', 'HOVER', 'WAIT_TARGET'} <= phases
+        assert m.reason == 'target_timeout', (m.phase, m.reason, m.relative_altitude, m.vertical_speed)
+        assert abs(m.relative_altitude - 20.) < .25
+        assert obs.ground_truth.simulation_time_s < 60
+        assert max(abs(v) for v in obs.ground_truth.position_m[:2]) < .1
+    finally:
+        sim.close()
+
+
+def test_hover_reset_post_hover_identity_and_los_handoff():
+    m = mission()
+    rc = None
+    hover_seen = False
+    reset_seen = False
+    old_detection = None
+    for step in range(1800):
+        now = 1000 + step / 240
+        altitude = 0. if step < 50 else 20.
+        # Once settled hover begins, disturb altitude and require a fresh dwell.
+        if hover_seen and not reset_seen:
+            altitude = 21.
+        f = feedback(step, now, altitude, armed=rc is not None and rc['channels'][4] == 2000,
+                     applied=0 if rc is None else rc['sequence'])
+        m.observe(f)
+        rc = m.tick(now_s=now, detection=old_detection)
+        if m.phase == 'HOVER' and not hover_seen:
+            hover_seen = True
+            old_detection = (dict(sequence=1, source=dict(f['source'])), (300, 260, 30, 25))
+        if hover_seen and m.phase == 'TAKEOFF':
+            reset_seen = True
+            assert m.settled_sim is None
+        if m.phase == 'WAIT_TARGET':
+            break
+    assert hover_seen and reset_seen and m.phase == 'WAIT_TARGET'
+    assert m._target(old_detection, now) is None
+    source = dict(f['source'], measurement_us=int((now + .01) * 1e6), episode_id='foreign')
+    assert m._target((dict(source=source, sequence=2), (300, 260, 30, 25)), now + .01) is None
+    prior_throttle = rc['channels'][2]
+    for offset in range(1, 80):
+        step += 1
+        now = 1000 + step / 240
+        f = feedback(step, now, 20., armed=True, applied=rc['sequence'])
+        m.observe(f)
+        detection = (dict(sequence=offset + 2, source=dict(f['source'])), (300, 260, 30, 25))
+        rc = m.tick(now_s=now, detection=detection)
+        assert rc['active'], (m.phase, m.reason)
+        if m.phase == 'LOS_ACQUIRE':
+            assert abs(rc['channels'][2] - prior_throttle) <= 5
+        prior_throttle = rc['channels'][2]
+        if m.phase == 'LOS_APPROACH':
+            break
+    assert m.phase == 'LOS_APPROACH'
+    assert m.nav_result.diagnostics.bearing_valid
+    # Restart feedback gets fresh state and cannot reuse previous filters/arming.
+    m.observe(feedback(0, now + .01, 4., state='stopped', episode='fresh'))
+    rc = m.tick(now_s=now + .01)
+    assert m.phase == 'READY' and not rc['active']
+    assert m.goal == 24. and m.arm_sequence is None
+    m.observe(feedback(100, 1000., 20.))
+    assert m.identity[1] == 'fresh' and m.phase == 'READY'
