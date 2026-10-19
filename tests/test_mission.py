@@ -177,3 +177,16 @@ def test_terminal_result_latches_until_fresh_episode():
     assert not m.complete(end)
     m.tick(now_s=1004.)
     assert m.phase == 'READY' and m.terminal_result is None
+
+
+def test_scenario_takeoff_height_is_latched_per_episode_and_v1_defaults():
+    m = mission()
+    m.observe(dict(feedback(0, 1000., 30., state='stopped'), schema_version=2, takeoff_height_m=6.5))
+    assert m.goal == 36.5 and m.takeoff_height_m == 6.5
+    # A duplicate source/state update cannot silently change an episode's goal.
+    m.observe(dict(feedback(0, 1000., 30., state='running'), schema_version=2, takeoff_height_m=10))
+    assert m.goal == 36.5
+    m.observe(dict(feedback(0, 1001., 4., state='stopped', episode='new'), schema_version=2, takeoff_height_m=8))
+    assert m.goal == 12 and m.takeoff_height_m == 8
+    m.observe(feedback(0, 1002., 7., state='stopped', episode='legacy'))
+    assert m.goal == 27 and m.takeoff_height_m == 20

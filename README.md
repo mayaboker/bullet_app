@@ -197,3 +197,12 @@ controller calculations remain in radians. For PlotJuggler, subscribe to this to
 on port5558, use source.simulation_time_s for simulation-time plots, and select the
 *_deg, *_deg_s and optical_ttc_s values. MCAP timestamps remain Unix arrival time;
 generated_us and source.measurement_us are host monotonic times.
+
+## Scenario takeoff height
+
+The renderer Scenario dialog selects a relative takeoff height together with the
+starting position. The physics runner confirms it and includes it in v2 flight
+feedback. The app latches that height for each new episode and climbs from the
+initial barometer altitude to datum + selected height, then uses the existing
+3 s settled hover and LOS flow. V1 feedback keeps the 20 m default. A running
+episode's goal cannot change through duplicate or later feedback updates.

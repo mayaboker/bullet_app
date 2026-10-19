@@ -2,6 +2,7 @@
 from dataclasses import asdict
 from copy import deepcopy
 from bullet_msgs.scenario import validate_end
+from bullet_msgs.spawn import DEFAULT_TAKEOFF_HEIGHT_M
 from math import isclose, radians
 from uuid import uuid4
 
@@ -11,7 +12,7 @@ from los_tracking import (CameraCalibration, AltitudeHeadingHold, AttitudeSample
 from los_tracking.geometry import euler, wrap
 
 
-TAKEOFF_HEIGHT_M = 20.0
+TAKEOFF_HEIGHT_M = DEFAULT_TAKEOFF_HEIGHT_M
 HOVER_DURATION_S = 3.0
 TARGET_TIMEOUT_S = 5.0
 TAKEOFF_TIMEOUT_S = 60.0
@@ -38,6 +39,7 @@ class Mission:
         self.hold = AltitudeHeadingHold(self.config)
         self.navigator = LosNavigator(self.config)
         self.datum = self.goal = None
+        self.takeoff_height_m = TAKEOFF_HEIGHT_M
         self.started_sim = self.settled_sim = self.hover_completed_sim = self.hover_completed_us = None
         self.last_step = -1
         self.last_input = NavigationInput()
@@ -76,6 +78,7 @@ class Mission:
             self._reset()
             self.identity = identity
             self.phase, self.reason = 'READY', 'ready'
+            self.takeoff_height_m = feedback.get('takeoff_height_m', TAKEOFF_HEIGHT_M)
         if source['step_index'] < self.last_step:
             return
         # State can change while the frozen source sample remains identical.
@@ -91,7 +94,7 @@ class Mission:
         self.hold.observe(self.last_input)
         if self.datum is None and barometer is not None:
             self.datum = barometer.altitude_m
-            self.goal = self.datum + TAKEOFF_HEIGHT_M
+            self.goal = self.datum + self.takeoff_height_m
 
     def complete(self, result):
         validate_end(result)
