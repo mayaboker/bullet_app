@@ -153,3 +153,27 @@ def test_hover_reset_post_hover_identity_and_los_handoff():
     assert m.goal == 24. and m.arm_sequence is None
     m.observe(feedback(100, 1000., 20.))
     assert m.identity[1] == 'fresh' and m.phase == 'READY'
+
+
+def test_terminal_result_latches_until_fresh_episode():
+    m = mission()
+    f = feedback(0, 1000., 4.)
+    m.observe(f)
+    rc = m.tick(now_s=1000.)
+    report = dict(schema_version=1, event_id='hit', controller_id='godot', issued_us=1_000_000_000,
+                  source=dict(f['source']), target_id='red_truck', drone_position_m=[50., 0., 4.])
+    end = dict(schema_version=1, event_id='hit', collision=report, final_source=dict(f['source']),
+               outcome='success', reason='target_hit', ended_us=1_000_000_000)
+    assert m.complete(end)
+    m.fail('feedback_stale')
+    # Completion can arrive before stopped feedback, and may outlive all freshness limits.
+    rc = m.tick(now_s=1002.)
+    assert m.phase == 'COMPLETED' and not rc['active'] and rc['channels'][2:3] == [1000]
+    stopped = dict(f, state='stopped', reason='target_hit', owner_id=None)
+    m.observe(stopped)
+    m.tick(now_s=1003.)
+    assert m.phase == 'COMPLETED'
+    m.observe(feedback(0, 1004., 4., state='stopped', episode='fresh'))
+    assert not m.complete(end)
+    m.tick(now_s=1004.)
+    assert m.phase == 'READY' and m.terminal_result is None

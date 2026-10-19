@@ -1,5 +1,7 @@
 """Sensor-only, deterministic takeoff/settle/LOS mission; sockets live in runtime."""
 from dataclasses import asdict
+from copy import deepcopy
+from bullet_msgs.scenario import validate_end
 from math import isclose, radians
 from uuid import uuid4
 
@@ -32,6 +34,7 @@ class Mission:
         self._reset()
 
     def _reset(self):
+        self.terminal_result = None
         self.hold = AltitudeHeadingHold(self.config)
         self.navigator = LosNavigator(self.config)
         self.datum = self.goal = None
@@ -90,8 +93,19 @@ class Mission:
             self.datum = barometer.altitude_m
             self.goal = self.datum + TAKEOFF_HEIGHT_M
 
+    def complete(self, result):
+        validate_end(result)
+        source = result['final_source']
+        if (source['physics_id'], source['episode_id'], source['stream_id']) != self.identity:
+            return False
+        if self.terminal_result is None:
+            self.terminal_result = deepcopy(result)
+        self.phase, self.reason = 'COMPLETED', 'target_hit'
+        return True
+
     def fail(self, reason):
-        self.phase, self.reason = 'FAULT', reason
+        if self.phase != 'COMPLETED':
+            self.phase, self.reason = 'FAULT', reason
 
     def tick(self, *, now_s, detection=None):
         if self.platform is None or self.feedback is None:
@@ -102,7 +116,9 @@ class Mission:
         armed = False
         command = DISARMED_AETR
         lifetime_us = COMMAND_LIFETIME_US
-        if f['state'] == 'running':
+        if self.phase == 'COMPLETED' or (f['state'] == 'stopped' and f['reason'] == 'target_hit'):
+            self.phase, self.reason = 'COMPLETED', 'target_hit'
+        elif f['state'] == 'running':
             if not self.running_seen:
                 self.running_seen = True
                 self.phase, self.reason = 'SENSOR_WARMUP', 'warming_sensors'
@@ -175,7 +191,7 @@ class Mission:
         else:
             if self.phase != 'FAULT':
                 self.phase, self.reason = 'READY', 'ready'
-        if self.phase == 'FAULT':
+        if self.phase in ('FAULT', 'COMPLETED'):
             active, armed, command = False, False, DISARMED_AETR
         if lifetime_us <= 0:
             self.fail('command_expired')

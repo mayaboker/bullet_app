@@ -114,7 +114,8 @@ a 60 simulation second deadline. After hover, only a bbox captured after hover
 completion can start LOS; no fresh target within 5 simulation seconds freezes
 the episode. LOS faults, stale sensors, withdrawn intent and expired commands
 also freeze it. Start/Reset creates fresh state; no automatic running takeover
-is allowed after an app restart. No collision inference or landing is included.
+is allowed after an app restart. Godot-confirmed target contact completes the
+scenario; the app does not infer collision from bbox size or implement landing.
 
 The controller receives barometer altitude and explicitly **ideal simulator
 attitude**, with no XY position or velocity feedback. This is altitude/heading
@@ -144,3 +145,14 @@ poses, bboxes and images using the render recorder profile. PlotJuggler may
 subscribe to multiple ports; use `source.simulation_time_s` for feedback and
 `simulation_time_s` for mission plots. Bearing, LOS rates and TTC appear under
 mission `diagnostics`. Requested RC and applied acknowledgements are separate.
+
+## Confirmed scenario completion
+
+The mission thread subscribes to `scenario/ended` and simulation state v2 on
+physics telemetry (5555). A result for the current physics/episode/stream latches
+`COMPLETED / target_hit`. It stops calling LOS and publishes inactive/disarmed RC.
+Stale feedback, platform timeout, subsequent stopped packets and repeated events
+cannot erase completion. A fresh episode clears the latch and controller state.
+Stopped feedback with reason target_hit also supports late app startup while the
+full confirmed result is recovered from repeated telemetry. No extra app port or
+participant shutdown is required; the debug preview stays open.

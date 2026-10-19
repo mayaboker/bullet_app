@@ -7,6 +7,8 @@ import cv2
 import zmq
 from bullet_msgs.flight import (CONFIG_TOPIC, FEEDBACK_TOPIC, RC_TOPIC, MISSION_TOPIC,
                                MAX_FLIGHT_BYTES, decode, encode, validate_config, validate_feedback, validate_rc)
+from bullet_msgs.control import STATE_TOPIC, validate_state
+from bullet_msgs.scenario import END_TOPIC, validate_end
 from los_tracking import NavigatorConfig
 from .detector import detect_red_box
 from .mission import Mission
@@ -70,7 +72,7 @@ class MissionRuntime:
                     socket.setsockopt(zmq.LINGER, 0)
                 subscriber.setsockopt(zmq.RCVHWM, FEEDBACK_HWM)
                 subscriber.setsockopt(zmq.MAXMSGSIZE, MAX_FLIGHT_BYTES)
-                for topic in (CONFIG_TOPIC, FEEDBACK_TOPIC):
+                for topic in (CONFIG_TOPIC, FEEDBACK_TOPIC, STATE_TOPIC, END_TOPIC):
                     subscriber.setsockopt(zmq.SUBSCRIBE, topic)
                 subscriber.connect(self.transport['telemetry_endpoint'])
                 commands.setsockopt(zmq.SNDHWM, 4)
@@ -93,6 +95,12 @@ class MissionRuntime:
                                     platform = decode(parts[1], validate_config)
                                     mission.configure(platform)
                                     last_config = time.monotonic()
+                                elif parts[0] == END_TOPIC:
+                                    mission.complete(decode(parts[1], validate_end))
+                                elif parts[0] == STATE_TOPIC:
+                                    state = decode(parts[1], validate_state)
+                                    if state.get('terminal_result') is not None:
+                                        mission.complete(state['terminal_result'])
                                 elif parts[0] == FEEDBACK_TOPIC:
                                     packet = decode(parts[1], validate_feedback)
                                     if packet['source']['measurement_us'] / 1e6 <= time.monotonic():
