@@ -12,6 +12,7 @@ from bullet_msgs.scenario import END_TOPIC, validate_end
 from los_tracking import NavigatorConfig
 from .detector import detect_red_box
 from .mission import Mission
+from .los_telemetry import LosTelemetryPublisher
 from .publisher import BboxPublisher
 from .receiver import ImageReceiver
 
@@ -66,6 +67,7 @@ class MissionRuntime:
         mission = Mission(self.config)
         publisher = None
         last_command = None
+        los_telemetry = None
         try:
             with zmq.Context() as context, context.socket(zmq.SUB) as subscriber, context.socket(zmq.PUB) as commands:
                 for socket in (subscriber, commands):
@@ -78,6 +80,7 @@ class MissionRuntime:
                 commands.setsockopt(zmq.SNDHWM, 4)
                 commands.bind(self.transport['flight_command_endpoint'])
                 publisher = BboxPublisher(self.bbox_endpoint)
+                los_telemetry = LosTelemetryPublisher(publisher.socket)
                 last_config = float('-inf')
                 last_bbox = None
                 next_tick = time.monotonic()
@@ -122,6 +125,7 @@ class MissionRuntime:
                                 command['channels'][2] = 1000
                             commands.send_multipart([RC_TOPIC, encode(command, validate_rc)], zmq.NOBLOCK)
                             last_command = command
+                        los_telemetry.publish(mission, now_s=now)
                         status = mission.status(now)
                         if status is not None:
                             publisher.socket.send_multipart([MISSION_TOPIC, json.dumps(status, allow_nan=False).encode()], zmq.NOBLOCK)
@@ -138,6 +142,8 @@ class MissionRuntime:
                             next_tick = now + COMMAND_PERIOD_S
                         self.stop.wait(max(0, next_tick - time.monotonic()))
                 finally:
+                    if los_telemetry is not None:
+                        los_telemetry.publish(mission, now_s=time.monotonic(), shutdown=True)
                     if last_command is not None:
                         now_us = time.monotonic_ns() // 1000
                         last_command.update(sequence=last_command['sequence'] + 1, issued_us=now_us,

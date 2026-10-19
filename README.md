@@ -156,3 +156,44 @@ cannot erase completion. A fresh episode clears the latch and controller state.
 Stopped feedback with reason target_hit also supports late app startup while the
 full confirmed result is recovered from repeated telemetry. No extra app port or
 participant shutdown is required; the debug preview stays open.
+
+## Focused LOS telemetry in degrees
+
+Mission-enabled `bullet_app` publishes **tracking/front/los** on its existing app
+endpoint (default `tcp://127.0.0.1:5558`). The default render recorder profile
+records this JSON topic to MCAP. Detector-only mode does not create LOS results.
+Normal LOS samples publish at **30 Hz**; mission/navigation state, stage, reason
+and activity changes publish immediately. The publisher borrows the mission
+thread's existing socket and adds no port or thread.
+
+| Fields | Meaning / units |
+|---|---|
+| elevation_deg, azimuth_deg | Rotation-compensated LOS bearing, degrees; elevation positive down, azimuth positive left relative to held heading |
+| elevation_rate_deg_s, azimuth_rate_deg_s | LOS angular rates in degrees/second |
+| bearing_valid, rate_observable | Whether the corresponding bearing/rate estimates are currently usable |
+| optical_ttc_s, ttc_valid | Optical TTC in seconds and qualified-estimate flag |
+| ttc_reason, ttc_relative_residual | Qualification/rejection reason and dimensionless fit residual; smaller residual indicates a closer fit, not a probability |
+| navigator_state, stage, reason | Actual navigator state, BEARING/TTC/TERMINAL stage (lowercase on wire), and current navigation/lifecycle reason |
+| mission_phase, active | App mission phase and whether this packet contains a current LOS result |
+| generated_us, navigation_sequence | Active result generation time in host monotonic microseconds and its library sequence |
+| source | Physics/episode/stream identity, step, physics measurement_us and simulation_time_s |
+| app_id, sequence | Publisher identity and telemetry publication sequence, distinct from library result sequence |
+
+Inactive state-change markers are emitted before LOS starts and on Stop, fault,
+collision completion, reset and graceful app shutdown. They clear bearing/rate/TTC
+estimates and residual, set validity flags false, and have null navigation_sequence.
+They retain the last actual navigator state/stage for the ending episode; a new
+episode clears these. generated_us is the transition time for an inactive marker.
+Repeated unchanged idle state is not sent as a periodic sample.
+
+Unavailable or invalid estimates are **null**, never invented zeros or stale
+values marked valid. A supplied TTC residual is retained for an active but
+unqualified fit (for example noisy_growth). TTC comes from apparent bbox growth;
+collision confirmation remains the separate renderer/physics scenario event.
+
+Existing `app/drone_1/mission` diagnostics retain their native radians unchanged.
+The focused topic converts only logged bearings/rates using degrees=rad*180/pi;
+controller calculations remain in radians. For PlotJuggler, subscribe to this topic
+on port5558, use source.simulation_time_s for simulation-time plots, and select the
+*_deg, *_deg_s and optical_ttc_s values. MCAP timestamps remain Unix arrival time;
+generated_us and source.measurement_us are host monotonic times.
