@@ -35,6 +35,7 @@ class Mission:
         self._reset()
 
     def _reset(self):
+        self.diagnostics = {}
         self.terminal_result = None
         self.hold = AltitudeHeadingHold(self.config)
         self.navigator = LosNavigator(self.config)
@@ -193,7 +194,7 @@ class Mission:
                     self.fail('warmup_or_arm_timeout')
         else:
             if self.phase != 'FAULT':
-                self.phase, self.reason = 'READY', 'ready'
+                self.phase, self.reason = 'READY', f['reason']
         if self.phase in ('FAULT', 'COMPLETED'):
             active, armed, command = False, False, DISARMED_AETR
         if lifetime_us <= 0:
@@ -227,4 +228,6 @@ class Mission:
                     hover_remaining_s=max(0., HOVER_DURATION_S - (0 if self.settled_sim is None else sim - self.settled_sim)),
                     target_remaining_s=max(0., TARGET_TIMEOUT_S - (0 if self.hover_completed_sim is None else sim - self.hover_completed_sim)),
                     navigator_state=None if self.nav_result is None else self.nav_result.state.value,
-                    diagnostics=self.diagnostics)
+                    diagnostics={**self.diagnostics, 'physics_state': self.feedback['state'],
+                                 'physics_reason': self.feedback['reason'],
+                                 'acquisition_timeout_s': self.config.tuning.acquisition_timeout_s})

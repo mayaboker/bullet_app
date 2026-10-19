@@ -190,3 +190,23 @@ def test_scenario_takeoff_height_is_latched_per_episode_and_v1_defaults():
     assert m.goal == 12 and m.takeoff_height_m == 8
     m.observe(feedback(0, 1002., 7., state='stopped', episode='legacy'))
     assert m.goal == 27 and m.takeoff_height_m == 20
+
+
+def test_stopped_feedback_retains_cause_and_fault_diagnostics_until_new_episode():
+    m = mission()
+    packet = feedback(0, 1000., 4., state='stopped')
+    packet['reason'] = 'stop'
+    m.observe(packet)
+    m.tick(now_s=1000.)
+    assert m.phase == 'READY' and m.reason == 'stop'
+    s = m.status(1000.)
+    assert s['diagnostics']['physics_reason'] == 'stop'
+    m.diagnostics = {'vision_reason': 'bearing_outside_envelope'}
+    m.fail('los_acquisition_timeout')
+    packet = dict(feedback(0, 1000., 4., state='stopped'), reason='app_withdrawn')
+    m.observe(packet)
+    m.tick(now_s=1000.)
+    assert m.phase == 'FAULT' and m.reason == 'los_acquisition_timeout'
+    assert m.status(1000.)['diagnostics']['vision_reason'] == 'bearing_outside_envelope'
+    m.observe(feedback(0, 1001., 4., state='stopped', episode='new'))
+    assert m.diagnostics == {} and m.phase == 'READY'

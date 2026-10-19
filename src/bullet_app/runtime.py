@@ -172,17 +172,20 @@ def run_mission(args, transport):
         if args.debug:
             cv2.namedWindow(window, cv2.WINDOW_NORMAL)
             opened = True
+        from .status import format_status, status_key
+        previous_status = None
         previous_phase = None
         while not runtime.stop.is_set():
             with runtime.lock:
                 display, status = runtime.display, runtime.status
-            if status is not None and status['phase'] != previous_phase:
+            if status is not None and status_key(status) != previous_status:
+                previous_status = status_key(status)
                 previous_phase = status['phase']
-                print(f"Mission {previous_phase}: {status['reason']}", flush=True)
+                print(f"Mission {previous_phase}: {format_status(status)}", flush=True)
             if args.debug:
                 if display is not None:
                     from .main import draw_debug
-                    cv2.imshow(window, draw_debug(*display, previous_phase or 'Waiting'))
+                    cv2.imshow(window, draw_debug(*display, f"{status['phase']}: {format_status(status)}" if status else 'Waiting'))
                 if cv2.waitKey(10) & 0xff in (ord('q'), 27) or cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
                     break
             else:

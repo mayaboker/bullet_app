@@ -1,0 +1,68 @@
+"""Readable mission messages; machine reason codes stay in telemetry."""
+from math import degrees
+
+
+REASON_MESSAGES = {
+    'no_target': 'no target detected',
+    'not_observed': 'waiting for target observations',
+    'stale_image': 'target image is too old',
+    'clipped_target': 'target box touches the image edge',
+    'attitude_unaligned': 'waiting for attitude aligned to the image timestamp',
+    'los_deviation': 'target moved outside the allowed LOS deviation',
+    'association_jump': 'target bearing jumped too far between images',
+    'vertical_warmup': 'waiting for altitude and vertical-speed estimates',
+    'feedback_stale': 'physics feedback is too old',
+    'sensors_stale': 'attitude or altitude samples are too old',
+    'rc_expired': 'no valid RC command arrived before its deadline',
+    'app_withdrawn': 'the app withdrew RC control',
+    'controller_timeout': 'renderer controller heartbeat timed out',
+    'controller_changed': 'renderer controller changed',
+    'stop': 'Stop command received',
+    'reset': 'Reset command received',
+    'spawn_applied': 'scenario applied; waiting for Start',
+    'waiting_app': 'waiting for app readiness',
+    'app_not_ready': 'Start rejected because the app was not ready',
+}
+
+
+def status_key(status):
+    """Log cause changes, not every fluctuating bearing sample."""
+    d = status.get('diagnostics', {})
+    return (status['episode_id'], status['phase'], status['reason'],
+            d.get('vision_reason'), d.get('input_rejection'),
+            d.get('physics_state'), d.get('physics_reason'))
+
+
+def rejection_message(d):
+    reason = d.get('vision_reason')
+    if reason == 'bearing_outside_envelope':
+        exceeded = []
+        for axis in ('azimuth', 'elevation'):
+            measured, limit = d.get(f'rejected_{axis}_rad'), d.get(f'max_{axis}_rad')
+            if measured is not None and limit is not None and abs(measured) > limit:
+                exceeded.append(f'{axis} {degrees(measured):+.2f} deg exceeds +/-{degrees(limit):.2f} deg')
+        return 'target rejected: ' + ('; '.join(exceeded) if exceeded else 'bearing outside allowed angle limits')
+    if reason and reason != 'usable':
+        return REASON_MESSAGES.get(reason, reason.replace('_', ' '))
+    return ''
+
+
+def format_status(status):
+    phase, reason = status['phase'], status['reason']
+    d = status.get('diagnostics', {})
+    rejection = rejection_message(d)
+    if phase == 'LOS_ACQUIRE':
+        return 'Acquiring target' + (': ' + rejection if rejection else '; collecting consistent observations')
+    if phase == 'FAULT':
+        if reason == 'los_acquisition_timeout':
+            timeout = d.get('acquisition_timeout_s')
+            duration = f' after {timeout:g} s' if timeout is not None else ''
+            message = 'LOS acquisition timed out' + duration
+        else:
+            message = REASON_MESSAGES.get(reason, reason.replace('_', ' '))
+        return message + ('; last visual issue: ' + rejection if rejection else '')
+    if phase == 'READY' and d.get('physics_state') in ('stopped', 'error'):
+        stop_reason = d.get('physics_reason', reason)
+        return f"Physics {d['physics_state']}: {REASON_MESSAGES.get(stop_reason, stop_reason.replace('_', ' '))} [{stop_reason}]"
+    message = REASON_MESSAGES.get(reason, reason.replace('_', ' '))
+    return message + ('; ' + rejection if phase.startswith('LOS_') and rejection else '')

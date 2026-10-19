@@ -206,3 +206,24 @@ feedback. The app latches that height for each new episode and climbs from the
 initial barometer altitude to datum + selected height, then uses the existing
 3 s settled hover and LOS flow. V1 feedback keeps the 20 m default. A running
 episode's goal cannot change through duplicate or later feedback updates.
+
+## Mission errors and LOS angle limits
+
+The default/Bullet profile allows target azimuth within **±35 degrees** of the
+held heading; elevation remains **±60 degrees**. The camera can see farther
+sideways than this control envelope. Rejected detections cannot become valid
+bearings or drive LOS control.
+
+The console logs phase and cause changes, including rejections during acquisition:
+`Mission LOS_ACQUIRE: Acquiring target: target rejected: azimuth +36.20 deg exceeds +/-35.00 deg`.
+An acquisition timeout reports the configured duration and last visual issue.
+The camera debug overlay shows the same message with wrapped, readable text.
+READY after stopped feedback shows the physics reason, such as Stop command,
+RC expiry, controller loss or Reset. A fault remains latched until a new episode.
+
+Machine reason codes remain unchanged. `app/drone_1/mission` diagnostics retain
+`vision_reason`, separate `rejected_azimuth_rad` / `rejected_elevation_rad`, angular
+limits, physics state/reason and acquisition timeout. Rejected angles never set
+`bearing_valid`. Console/display angles use degrees; library diagnostic angles
+remain radians. The focused `tracking/front/los` schema and valid-bearing/null
+semantics are unchanged.
