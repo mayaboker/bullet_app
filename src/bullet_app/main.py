@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 import zmq
 from bullet_msgs import load_transport
-from los_tracking import detect_red_box
+from .detector import detect_red_box
 
 from .publisher import BboxPublisher
 from .receiver import ImageReceiver

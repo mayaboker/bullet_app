@@ -8,7 +8,7 @@ import zmq
 from bullet_msgs.shm import FrameWriter, topic_prefix
 
 from bullet_app.receiver import ImageReceiver
-from los_tracking import detect_red_box
+from bullet_app.detector import detect_red_box
 
 
 TOPIC = "camera/front/image"

@@ -26,8 +26,12 @@ The debug application provides the camera and bounding-box preview.
 
 The receiver moved here from `los_tracking`; it uses `bullet_msgs.FrameReader`
 for exact topic matching, SHM validation, private BGR copies, duplicate/stale
-skips, row padding, and publisher restarts. `los_tracking` now owns detection
-only. The former live example also moved here to avoid a dependency cycle.
+skips, row padding, and publisher restarts. The red detector now lives in
+`bullet_app.detector`; its image-to-bbox behavior is unchanged. `los_tracking`
+now owns the separate bbox/barometer/attitude-to-RC library. This live app still
+runs detection and recording only; sensor reception and flight-command transport
+are deferred. See the [navigator calling contract](../los_tracking/README.md).
+The former live example also moved here.
 
 ## Input and output
 
@@ -73,3 +77,11 @@ uv run --locked --all-packages --all-extras --all-groups pytest -q
 
 Tests include TCP/SHM reception, debug/non-GUI paths, JSON contracts, and a real
 image-to-detection-to-MCAP round trip using synthetic images.
+
+## Red detector ownership
+
+`from bullet_app.detector import detect_red_box` accepts a nonempty H×W×3 uint8
+BGR array and returns `(x, y, width, height)` or `None`, preserving the input.
+It selects the largest red contour using HSV hue 0–10 or 170–180, saturation
+>=100, value >=80, 3×3 opening, contour area >=4 and width/height >=3 pixels.
+This replaces the former `los_tracking.detect_red_box` import.
