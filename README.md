@@ -104,16 +104,18 @@ uv run --locked --all-packages --all-extras --all-groups bullet-app \
 ```
 
 Each Start creates a new episode and runs `SENSOR_WARMUP → ARMING → TAKEOFF →
-HOVER → WAIT_TARGET → LOS_ACQUIRE → LOS_APPROACH`. The app first sends disarmed
-Angle frames so grounded physics produces sensor samples, then waits for applied
+HOVER → WAIT_TARGET → YAW_SEARCH → YAW_SETTLE → LOS_ACQUIRE → LOS_APPROACH`. A
+target already visible after hover skips yaw search/settling. The app first sends
+disarmed Angle frames so grounded physics produces sensor samples, then waits for applied
 arming confirmation. It climbs 20 m above the initial barometer reading with a
 1 m/s vertical reference limit. Hover requires altitude error <=0.25 m,
 |vertical speed| <=0.2 m/s and roll/pitch/heading errors <=5 degrees continuously
 for 3 simulation seconds; deviations restart the countdown. Takeoff/settling has
 a 60 simulation second deadline. After hover, only a bbox captured after hover
-completion can start LOS; no fresh target within 5 simulation seconds freezes
-the episode. LOS faults, stale sensors, withdrawn intent and expired commands
-also freeze it. Start/Reset creates fresh state; no automatic running takeover
+completion can start LOS. If absent after a fresh frame check (at most 100 ms),
+the app searches with positive yaw at 15 deg/s. One measured full circle without
+a usable target freezes the episode. LOS faults, stale sensors, withdrawn intent
+and expired commands also freeze it. Start/Reset creates fresh state; no automatic running takeover
 is allowed after an app restart. Godot-confirmed target contact completes the
 scenario; the app does not infer collision from bbox size or implement landing.
 
@@ -227,3 +229,36 @@ limits, physics state/reason and acquisition timeout. Rejected angles never set
 `bearing_valid`. Console/display angles use degrees; library diagnostic angles
 remain radians. The focused `tracking/front/los` schema and valid-bearing/null
 semantics are unchanged.
+
+## Yaw target search
+
+After settled hover, the app checks the next fresh target frame, waiting at most
+100 ms. A usable target starts LOS directly. Otherwise `YAW_SEARCH` turns at
+**15 deg/s positive body yaw** (counterclockwise from above), with level roll/pitch
+and the selected altitude held. The default scan takes about 24 s. It uses
+measured attitude to unwrap a net full circle, including across +/-180 degrees;
+command time alone cannot claim a complete scan. No XY truth is used.
+
+Only a fresh, current-episode, unclipped target with timestamp-aligned attitude
+and bearing within the existing +/-35-degree azimuth and +/-60-degree elevation
+limits stops rotation. Edge/clipped/stale/out-of-envelope detections do not stop
+the scan. `YAW_SETTLE` holds the heading measured at detection, requiring yaw
+speed <=5 deg/s, heading error <=2 degrees and the existing altitude/vertical-speed/
+level-attitude tolerances continuously for **0.3 simulation seconds**. Losing
+the candidate resumes the remaining scan without resetting its angle or timer.
+
+After settling, the app saves the current heading and transfers the existing
+filter/controller state to LOS. Only images captured after settling can enter
+LOS acquisition, which still needs its normal dwell before approach. The drone
+does not return to its original heading, and yaw continues to hold the new
+heading during approach rather than center the bbox. A full circle without a
+usable target latches `search_exhausted`; **34 simulation seconds**, including
+settling interruptions, latches `search_timeout` if the scan cannot finish.
+Both withdraw active RC and freeze the episode until a new Start/Reset.
+
+Mission diagnostics include `search_swept_deg`, `search_remaining_deg`,
+`search_commanded_yaw_rate_deg_s`, `search_measured_yaw_rate_deg_s`,
+`search_elapsed_s` and the visual rejection cause. Console/debug status shows
+search/settling and degrees; focused LOS telemetry remains inactive until
+acquisition. No new port or message version is introduced. Custom profiles must
+allow at least the 15 deg/s search rate; the app rejects incompatible limits.

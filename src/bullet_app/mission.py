@@ -9,12 +9,14 @@ from uuid import uuid4
 from bullet_msgs.flight import validate_config, validate_feedback, COMMAND_LIFETIME_US
 from los_tracking import (CameraCalibration, AltitudeHeadingHold, AttitudeSample, BarometerSample,
                           LosNavigator, NavigationInput, RcChannels, State, TargetObservation)
-from los_tracking.geometry import euler, wrap
+from los_tracking.geometry import euler, wrap, world_bearing
+from .search import (YawSearch, SEARCH_RATE_RAD_S, SEARCH_TIMEOUT_S, YAW_SETTLE_DURATION_S,
+                     YAW_SETTLE_RATE_RAD_S, YAW_SETTLE_ERROR_RAD, ANGLE_EPSILON_RAD)
 
 
 TAKEOFF_HEIGHT_M = DEFAULT_TAKEOFF_HEIGHT_M
 HOVER_DURATION_S = 3.0
-TARGET_TIMEOUT_S = 5.0
+TARGET_CHECK_DURATION_S = 0.1
 TAKEOFF_TIMEOUT_S = 60.0
 ALTITUDE_TOLERANCE_M = 0.25
 VERTICAL_SPEED_TOLERANCE_M_S = 0.2
@@ -25,6 +27,8 @@ DISARMED_AETR = RcChannels(1500, 1500, 1000, 1500)
 
 class Mission:
     def __init__(self, config, *, app_id=None):
+        if config.tuning.yaw_rate_limit_rad_s < SEARCH_RATE_RAD_S:
+            raise ValueError('yaw search requires a yaw limit of at least 15 deg/s')
         self.config = config
         self.app_id = app_id or uuid4().hex
         self.platform = self.feedback = None
@@ -45,6 +49,8 @@ class Mission:
         self.last_step = -1
         self.last_input = NavigationInput()
         self.nav_result = None
+        self.search = YawSearch()
+        self.los_started_us = None
         self.arm_sequence = None
         self.running_seen = False
         self.relative_altitude = self.vertical_speed = None
@@ -93,6 +99,7 @@ class Mission:
                      BarometerSample(source['stream_id'], source['step_index'], timestamp, feedback['barometer_altitude_m']))
         self.last_input = NavigationInput(attitude=attitude, barometer=barometer)
         self.hold.observe(self.last_input)
+        self.search.observe(euler(attitude.orientation_xyzw)[2], source["simulation_time_s"])
         if self.datum is None and barometer is not None:
             self.datum = barometer.altitude_m
             self.goal = self.datum + self.takeoff_height_m
@@ -141,7 +148,7 @@ class Mission:
                     armed = True
                     if f['armed'] and f['mode'] == 'angle' and f['last_applied_sequence'] >= self.arm_sequence:
                         self.phase, self.reason = 'TAKEOFF', 'climbing'
-                if self.phase in ('TAKEOFF', 'HOVER', 'WAIT_TARGET', 'LOS_ACQUIRE', 'LOS_APPROACH'):
+                if self.phase in ('TAKEOFF', 'HOVER', 'WAIT_TARGET', 'YAW_SEARCH', 'YAW_SETTLE', 'LOS_ACQUIRE', 'LOS_APPROACH'):
                     armed = True
                     if not self.hold.ready(now_s):
                         self.fail('sensors_stale')
@@ -162,34 +169,7 @@ class Mission:
                             self.phase = 'LOS_APPROACH' if result.state == State.TRACK else 'LOS_ACQUIRE'
                             self.reason = result.reason
                     else:
-                        command = self.hold.command(now_s=now_s, target_altitude_m=self.goal)
-                        altitude, vz = self.hold.estimate(now_s)
-                        self.relative_altitude, self.vertical_speed = altitude - self.datum, vz
-                        self.diagnostics = dict(self.hold.control.last_diagnostics)
-                        if self.phase in ('TAKEOFF', 'HOVER'):
-                            roll, pitch, yaw = euler(self.last_input.attitude.orientation_xyzw)
-                            settled = (abs(altitude - self.goal) <= ALTITUDE_TOLERANCE_M
-                                       and abs(vz) <= VERTICAL_SPEED_TOLERANCE_M_S
-                                       and max(abs(roll), abs(pitch), abs(wrap(yaw - self.hold.heading_rad))) <= ATTITUDE_TOLERANCE_RAD)
-                            if not settled:
-                                self.settled_sim = None
-                                self.phase, self.reason = 'TAKEOFF', 'climbing_or_settling'
-                            else:
-                                self.phase, self.reason = 'HOVER', 'settling'
-                                if self.settled_sim is None:
-                                    self.settled_sim = sim
-                                if sim - self.settled_sim >= HOVER_DURATION_S:
-                                    self.phase, self.reason = 'WAIT_TARGET', 'waiting_post_hover_bbox'
-                                    self.hover_completed_sim, self.hover_completed_us = sim, now_us
-                            if sim - self.started_sim >= TAKEOFF_TIMEOUT_S:
-                                self.fail('takeoff_timeout')
-                        if self.phase == 'WAIT_TARGET':
-                            target = self._target(detection, now_s)
-                            if target is not None and target.bbox is not None:
-                                self.navigator.reset(handoff=self.hold.handoff(now_s=now_s, target_altitude_m=self.goal))
-                                self.phase, self.reason = 'LOS_ACQUIRE', 'acquiring'
-                            elif sim - self.hover_completed_sim >= TARGET_TIMEOUT_S:
-                                self.fail('target_timeout')
+                        command = self._hold_tick(now_s, detection)
                 if self.phase in ('SENSOR_WARMUP', 'ARMING') and sim - self.started_sim >= TAKEOFF_TIMEOUT_S:
                     self.fail('warmup_or_arm_timeout')
         else:
@@ -205,13 +185,115 @@ class Mission:
         return dict(schema_version=1, physics_id=source['physics_id'], episode_id=source['episode_id'], app_id=self.app_id,
                     sequence=self.sequence, issued_us=now_us, valid_until_us=now_us + lifetime_us, active=active, channels=channels)
 
+    def _hold_tick(self, now_s, detection):
+        sim = self.feedback['source']['simulation_time_s']
+        now_us = int(now_s * 1e6)
+        altitude, vz = self.hold.estimate(now_s)
+        self.relative_altitude, self.vertical_speed = altitude - self.datum, vz
+        roll, pitch, yaw = euler(self.last_input.attitude.orientation_xyzw)
+        level = (abs(altitude - self.goal) <= ALTITUDE_TOLERANCE_M
+                 and abs(vz) <= VERTICAL_SPEED_TOLERANCE_M_S
+                 and max(abs(roll), abs(pitch)) <= ATTITUDE_TOLERANCE_RAD)
+        if self.phase in ('TAKEOFF', 'HOVER'):
+            settled = level and abs(wrap(yaw - self.hold.heading_rad)) <= ATTITUDE_TOLERANCE_RAD
+            if not settled:
+                self.settled_sim = None
+                self.phase, self.reason = 'TAKEOFF', 'climbing_or_settling'
+            else:
+                self.phase, self.reason = 'HOVER', 'settling'
+                if self.settled_sim is None:
+                    self.settled_sim = sim
+                if sim - self.settled_sim >= HOVER_DURATION_S:
+                    self.phase, self.reason = 'WAIT_TARGET', 'waiting_post_hover_bbox'
+                    self.hover_completed_sim, self.hover_completed_us = sim, now_us
+            if sim - self.started_sim >= TAKEOFF_TIMEOUT_S:
+                self.fail('takeoff_timeout')
+
+        begin_los = False
+        vision = {}
+        if self.phase in ('WAIT_TARGET', 'YAW_SEARCH', 'YAW_SETTLE'):
+            candidate, vision = self._search_target(detection, now_s)
+            if self.phase == 'WAIT_TARGET':
+                if candidate is not None:
+                    begin_los = True
+                elif self._target(detection, now_s) is not None or sim - self.hover_completed_sim >= TARGET_CHECK_DURATION_S:
+                    self.search.start(sim)
+                    self.phase, self.reason = 'YAW_SEARCH', 'searching_target'
+            if self.phase == 'YAW_SEARCH':
+                if candidate is not None:
+                    self.hold.set_heading(yaw)
+                    self.search.settled_sim = None
+                    self.phase, self.reason = 'YAW_SETTLE', 'settling_yaw'
+                elif self.search.exhausted:
+                    self.fail('search_exhausted')
+            if self.phase == 'YAW_SETTLE':
+                if candidate is None:
+                    self.search.start(sim)  # Resume; retain the original angle and deadline.
+                    self.phase, self.reason = 'YAW_SEARCH', 'searching_target'
+                    if self.search.exhausted:
+                        self.fail('search_exhausted')
+                else:
+                    settled = (level and abs(self.search.yaw_rate_rad_s) <= YAW_SETTLE_RATE_RAD_S
+                               and abs(wrap(yaw - self.hold.heading_rad)) <= YAW_SETTLE_ERROR_RAD)
+                    if not settled:
+                        self.search.settled_sim = None
+                    elif self.search.settled_sim is None:
+                        self.search.settled_sim = sim
+                    elif sim - self.search.settled_sim >= YAW_SETTLE_DURATION_S:
+                        self.hold.set_heading(yaw)
+                        begin_los = True
+            if self.search.started_sim is not None and self.search.elapsed(sim) >= SEARCH_TIMEOUT_S:
+                self.fail('search_timeout')
+                begin_los = False
+
+        command = self.hold.command(now_s=now_s, target_altitude_m=self.goal,
+                                   yaw_rate_rad_s=SEARCH_RATE_RAD_S if self.phase == 'YAW_SEARCH' else None)
+        self.diagnostics = {**self.hold.control.last_diagnostics, **vision}
+        if self.search.started_sim is not None:
+            self.diagnostics.update(self.search.diagnostics(sim, rotating=self.phase == 'YAW_SEARCH'))
+        if begin_los and self.phase != 'FAULT':
+            self.navigator.reset(handoff=self.hold.handoff(now_s=now_s, target_altitude_m=self.goal))
+            self.los_started_us = now_us
+            self.phase, self.reason = 'LOS_ACQUIRE', 'acquiring'
+        return command
+
+    def _search_target(self, detection, now_s):
+        """Prequalify geometry only; LOS still owns its acquisition/filter dwell."""
+        t, camera = self.config.tuning, self.config.camera
+        diagnostics = dict(vision_reason='not_observed', max_azimuth_rad=t.max_azimuth_rad,
+                           max_elevation_rad=t.max_elevation_rad,
+                           rejected_azimuth_rad=None, rejected_elevation_rad=None)
+        target = self._target(detection, now_s)
+        if target is None:
+            diagnostics['vision_reason'] = 'stale_or_foreign_image' if detection is not None else 'not_observed'
+            return None, diagnostics
+        if target.bbox is None:
+            diagnostics['vision_reason'] = 'no_target'
+            return None, diagnostics
+        x, y, width, height = target.bbox
+        if x <= 0 or y <= 0 or x + width >= camera.width_px or y + height >= camera.height_px:
+            diagnostics['vision_reason'] = 'clipped_target'
+            return None, diagnostics
+        attitude = self.hold.attitude_at(target.timestamp_s)
+        if attitude is None:
+            diagnostics['vision_reason'] = 'attitude_unaligned'
+            return None, diagnostics
+        heading = self.hold.heading_rad if self.phase == 'WAIT_TARGET' else self.search.yaw_rad
+        elevation, azimuth = world_bearing(target.bbox, camera, attitude, heading)
+        if abs(elevation) > t.max_elevation_rad + ANGLE_EPSILON_RAD or abs(azimuth) > t.max_azimuth_rad + ANGLE_EPSILON_RAD:
+            diagnostics.update(vision_reason='bearing_outside_envelope',
+                               rejected_elevation_rad=elevation, rejected_azimuth_rad=azimuth)
+            return None, diagnostics
+        diagnostics['vision_reason'] = 'usable'
+        return target, diagnostics
+
     def _target(self, detection, now_s):
         if detection is None or self.hover_completed_us is None:
             return None
         metadata, bbox = detection
         source = metadata.get('source')
         if (source is None or (source['physics_id'], source['episode_id'], source['stream_id']) != self.identity
-                or source['measurement_us'] <= self.hover_completed_us
+                or source['measurement_us'] <= (self.los_started_us if self.los_started_us is not None else self.hover_completed_us)
                 or not 0 <= now_s - source['measurement_us'] / 1e6 <= self.config.tuning.max_image_age_s):
             return None
         return TargetObservation(source['stream_id'], metadata['sequence'], source['measurement_us'] / 1e6, bbox)
@@ -226,7 +308,8 @@ class Mission:
                     phase=self.phase, reason=self.reason, relative_altitude_m=self.relative_altitude,
                     vertical_speed_m_s=self.vertical_speed,
                     hover_remaining_s=max(0., HOVER_DURATION_S - (0 if self.settled_sim is None else sim - self.settled_sim)),
-                    target_remaining_s=max(0., TARGET_TIMEOUT_S - (0 if self.hover_completed_sim is None else sim - self.hover_completed_sim)),
+                    target_remaining_s=(max(0., TARGET_CHECK_DURATION_S - (sim - self.hover_completed_sim))
+                                        if self.phase == 'WAIT_TARGET' else 0.),
                     navigator_state=None if self.nav_result is None else self.nav_result.state.value,
                     diagnostics={**self.diagnostics, 'physics_state': self.feedback['state'],
                                  'physics_reason': self.feedback['reason'],

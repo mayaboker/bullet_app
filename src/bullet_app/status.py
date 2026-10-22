@@ -3,6 +3,11 @@ from math import degrees
 
 
 REASON_MESSAGES = {
+    'searching_target': 'rotating to find a target',
+    'settling_yaw': 'target found; braking and settling yaw',
+    'search_exhausted': 'no usable target found in one full yaw circle',
+    'search_timeout': 'yaw search exceeded its 34 s deadline',
+    'stale_or_foreign_image': 'waiting for a fresh image from this episode',
     'no_target': 'no target detected',
     'not_observed': 'waiting for target observations',
     'stale_image': 'target image is too old',
@@ -51,6 +56,11 @@ def format_status(status):
     phase, reason = status['phase'], status['reason']
     d = status.get('diagnostics', {})
     rejection = rejection_message(d)
+    if phase in ('YAW_SEARCH', 'YAW_SETTLE'):
+        message = REASON_MESSAGES.get(reason, reason.replace('_', ' '))
+        swept = d.get('search_swept_deg', 0.)
+        rate = d.get('search_measured_yaw_rate_deg_s', 0.)
+        return f'{message}; swept {swept:.1f}/360 deg; yaw {rate:+.1f} deg/s' + ('; ' + rejection if rejection else '')
     if phase == 'LOS_ACQUIRE':
         return 'Acquiring target' + (': ' + rejection if rejection else '; collecting consistent observations')
     if phase == 'FAULT':

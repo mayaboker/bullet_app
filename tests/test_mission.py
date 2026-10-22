@@ -64,7 +64,8 @@ def test_profile_mismatch_refuses_readiness():
         m.configure(config)
 
 
-def test_sensor_only_physics_takeoff_hover_target_timeout():
+@pytest.mark.parametrize('target_found', [False, True])
+def test_sensor_only_physics_takeoff_hover_yaw_search(target_found):
     from bullet_drone.config import DroneSettings, SimulationConfig, SimulationSettings
     from bullet_drone.commands import RcInput
     from bullet_drone.controllers import InternalControlSettings, PidSettings
@@ -76,15 +77,16 @@ def test_sensor_only_physics_takeoff_hover_target_timeout():
                                         DroneSettings(1., (0., 0., .015))), inner)
     phases = set()
     rc = None
+    detection = None
     try:
         obs = sim.reset()
         m.observe(feedback(0, 1000., obs.sensors.barometer.altitude_m))
         for step in range(1, 16000):
             now = 1000 + (step - 1) / 240
             if rc is None or step % 12 in (0, 2, 5, 7, 10):
-                rc = m.tick(now_s=now)
+                rc = m.tick(now_s=now, detection=detection)
                 phases.add(m.phase)
-            if m.phase == 'FAULT':
+            if m.phase == 'FAULT' or m.phase == 'LOS_APPROACH':
                 break
             obs = sim.step(RcInput(tuple(rc['channels'])))
             if step % 2 == 0:
@@ -93,8 +95,34 @@ def test_sensor_only_physics_takeoff_hover_target_timeout():
                              armed=rc['channels'][4] >= 1500, applied=rc['sequence'])
                 f['orientation_xyzw'] = list(obs.ground_truth.orientation_xyzw)
                 m.observe(f)
-        assert {'SENSOR_WARMUP', 'ARMING', 'TAKEOFF', 'HOVER', 'WAIT_TARGET'} <= phases
-        assert m.reason == 'target_timeout', (m.phase, m.reason, m.relative_altitude, m.vertical_speed)
+                if target_found:
+                    # Test scene projects a fixed box behind the spawn. Only bbox and
+                    # sensor packets enter the mission; truth is used by this camera fixture.
+                    from los_tracking.geometry import rotate
+                    q = obs.ground_truth.orientation_xyzw
+                    position = obs.ground_truth.position_m
+                    bx, by, bz = rotate((-q[0], -q[1], -q[2], q[3]),
+                                        (-50. - position[0], -position[1], 2. - position[2]))
+                    bbox = None
+                    if bx > 0:
+                        cx, cy = 320 - 320 * by / bx, 240 - 320 * bz / bx
+                        half = 480 / bx
+                        left, top = max(0, round(cx - half)), max(0, round(cy - half))
+                        right, bottom = min(640, round(cx + half)), min(480, round(cy + half))
+                        if right > left and bottom > top:
+                            bbox = (left, top, right - left, bottom - top)
+                    detection = (dict(sequence=step, source=dict(f['source'])), bbox)
+        assert {'SENSOR_WARMUP', 'ARMING', 'TAKEOFF', 'HOVER', 'WAIT_TARGET', 'YAW_SEARCH'} <= phases
+        if target_found:
+            assert {'YAW_SETTLE', 'LOS_ACQUIRE', 'LOS_APPROACH'} <= phases, (m.phase, m.reason)
+            from math import degrees
+            assert 120 < degrees(m.hold.heading_rad) < 180
+            assert m.nav_result.diagnostics.bearing_valid
+            assert abs(rc['channels'][3] - 1500) < 5
+        else:
+            assert m.reason == 'search_exhausted', (m.phase, m.reason, m.relative_altitude, m.vertical_speed)
+            assert m.search.swept_rad >= radians(360)
+            assert m.search.elapsed(obs.ground_truth.simulation_time_s) < 34.
         assert abs(m.relative_altitude - 20.) < .25
         assert obs.ground_truth.simulation_time_s < 60
         assert max(abs(v) for v in obs.ground_truth.position_m[:2]) < .1

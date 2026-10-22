@@ -42,3 +42,17 @@ def test_idle_message_preserves_physics_stop_and_watchdog_reason():
     assert 'Stop command received [stop]' in format_status(s)
     s['diagnostics']['physics_reason'] = 'rc_expired'
     assert 'no valid RC command arrived before its deadline [rc_expired]' in format_status(s)
+
+
+def test_search_progress_settling_and_terminal_reasons():
+    s = status('YAW_SEARCH', 'searching_target')
+    s['diagnostics'].update(search_swept_deg=123.4, search_measured_yaw_rate_deg_s=15.)
+    assert 'swept 123.4/360 deg' in format_status(s)
+    assert 'yaw +15.0 deg/s' in format_status(s)
+    noisy = deepcopy(s)
+    noisy['diagnostics']['search_swept_deg'] = 123.5
+    assert status_key(s) == status_key(noisy)
+    s.update(phase='YAW_SETTLE', reason='settling_yaw')
+    assert 'braking and settling yaw' in format_status(s)
+    s.update(phase='FAULT', reason='search_exhausted')
+    assert 'one full yaw circle' in format_status(s)
