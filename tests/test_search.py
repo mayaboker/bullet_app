@@ -46,9 +46,9 @@ def test_unwrap_net_circle_duplicates_reverse_and_simulation_clock():
 def test_visible_target_skips_search_and_search_telemetry_is_inactive():
     m, step = after_hover()
     tick(m, step + 1, bbox=(300, 250, 25, 25))
-    assert m.phase == 'LOS_ACQUIRE'
-    assert m.search.started_sim is None
-    for step in range(step + 2, step + 70):
+    assert m.phase == 'YAW_SETTLE'
+    assert m.diagnostics['target_centered']
+    for step in range(step + 2, step + 140):
         tick(m, step, bbox=(300, 250, 25, 25))
         if m.phase == 'LOS_APPROACH':
             break
@@ -100,7 +100,7 @@ def test_candidate_loss_resumes_same_sweep_and_heading_handoff_is_continuous():
     before = m.search.swept_rad
     rc = tick(m, step, yaw=45., bbox=(300, 250, 25, 25))
     assert m.phase == 'YAW_SETTLE' and rc['channels'][3] == 1500
-    assert degrees(m.hold.heading_rad) == pytest.approx(45.)
+    assert degrees(m.hold.heading_rad) == pytest.approx(0.)  # Save the new heading only after centering/settling.
     assert not snapshot(m, now_s=1000 + step / 240, sequence=1)['active']
     tick(m, step + 1, yaw=45.)
     assert m.phase == 'YAW_SEARCH' and m.search.started_sim == start
@@ -180,3 +180,59 @@ def test_missing_camera_frame_gets_only_a_bounded_stationary_check():
             assert m.phase == 'WAIT_TARGET'
     assert m.phase == 'YAW_SEARCH'
     assert m.status(now)['target_remaining_s'] == 0.
+
+
+@pytest.mark.parametrize('error_px', [-200., -40., -10., 0., 10., 40., 200.])
+def test_center_rate_sign_deadband_and_saturation(error_px):
+    from bullet_app.search import centering_command, SEARCH_RATE_RAD_S
+    m = mission()
+    error, rate = centering_command((310 + error_px, 230, 20, 20), m.config.camera)
+    assert error == error_px
+    assert abs(rate) <= SEARCH_RATE_RAD_S
+    if abs(error_px) <= 10:
+        assert rate == 0.
+    else:
+        assert rate * error_px < 0  # Positive image X must turn right (negative body yaw).
+    if abs(error_px) == 200:
+        assert abs(rate) == SEARCH_RATE_RAD_S
+
+
+def test_off_center_visible_target_keeps_centering_and_corrects_overshoot():
+    m, step = after_hover()
+    rc = tick(m, step + 1, bbox=(420, 230, 20, 20))
+    assert m.phase == 'YAW_CENTER' and rc['channels'][3] < 1500
+    assert rc['channels'][:2] == [1500, 1500]
+    assert m.diagnostics['target_error_x_px'] == 110
+    assert m.diagnostics['search_commanded_yaw_rate_deg_s'] < 0
+    assert not snapshot(m, now_s=1000 + (step + 1) / 240, sequence=1)['active']
+    for step in range(step + 2, step + 140):
+        tick(m, step, bbox=(340, 230, 20, 20))
+        assert m.phase == 'YAW_CENTER' and m.nav_result is None
+    # Crossing the center reverses yaw correction, rather than starting another circle.
+    rc = tick(m, step + 1, bbox=(280, 230, 20, 20))
+    assert m.phase == 'YAW_CENTER' and rc['channels'][3] > 1500
+    rc = tick(m, step + 2, bbox=(310, 230, 20, 20))
+    assert m.phase == 'YAW_SETTLE' and rc['channels'][3] == 1500
+    assert m.diagnostics['target_error_x_px'] == 0 and m.diagnostics['target_centered']
+    started = m.search.started_sim
+    for step in range(step + 3, step + 30):
+        tick(m, step, bbox=(310, 230, 20, 20))
+    assert m.search.settled_sim is not None
+    rc = tick(m, step + 1, bbox=(321, 230, 20, 20))
+    assert m.phase == 'YAW_CENTER' and m.search.settled_sim is None
+    assert rc['channels'][3] < 1500
+    for step in range(step + 2, step + 160):
+        tick(m, step, bbox=(310, 230, 20, 20))
+        if m.phase == 'LOS_APPROACH':
+            break
+    assert m.phase == 'LOS_APPROACH' and m.search.started_sim == started
+
+
+def test_target_loss_while_centering_resumes_original_scan():
+    m, step = after_hover()
+    tick(m, step + 1, bbox=(420, 230, 20, 20))
+    started = m.search.started_sim
+    assert m.phase == 'YAW_CENTER'
+    rc = tick(m, step + 2)
+    assert m.phase == 'YAW_SEARCH' and rc['channels'][3] > 1500
+    assert m.search.started_sim == started

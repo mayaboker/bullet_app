@@ -56,3 +56,13 @@ def test_search_progress_settling_and_terminal_reasons():
     assert 'braking and settling yaw' in format_status(s)
     s.update(phase='FAULT', reason='search_exhausted')
     assert 'one full yaw circle' in format_status(s)
+
+
+def test_centering_message_includes_pixel_error_without_angle_noise_spam():
+    s = status('YAW_CENTER', 'centering_target')
+    s['diagnostics'].update(target_error_x_px=-23.5, target_center_tolerance_px=10.)
+    assert 'centering target horizontally' in format_status(s)
+    assert 'X error -23.5 px (limit +/-10)' in format_status(s)
+    noisy = deepcopy(s)
+    noisy['diagnostics']['target_error_x_px'] = -23.
+    assert status_key(s) == status_key(noisy)

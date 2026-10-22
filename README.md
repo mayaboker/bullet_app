@@ -104,8 +104,9 @@ uv run --locked --all-packages --all-extras --all-groups bullet-app \
 ```
 
 Each Start creates a new episode and runs `SENSOR_WARMUP → ARMING → TAKEOFF →
-HOVER → WAIT_TARGET → YAW_SEARCH → YAW_SETTLE → LOS_ACQUIRE → LOS_APPROACH`. A
-target already visible after hover skips yaw search/settling. The app first sends
+HOVER → WAIT_TARGET → YAW_SEARCH → YAW_CENTER → YAW_SETTLE → LOS_ACQUIRE → LOS_APPROACH`.
+A target already visible after hover skips the blind scan but must still center
+and settle before LOS. The app first sends
 disarmed Angle frames so grounded physics produces sensor samples, then waits for applied
 arming confirmation. It climbs 20 m above the initial barometer reading with a
 1 m/s vertical reference limit. Hover requires altitude error <=0.25 m,
@@ -233,19 +234,22 @@ semantics are unchanged.
 ## Yaw target search
 
 After settled hover, the app checks the next fresh target frame, waiting at most
-100 ms. A usable target starts LOS directly. Otherwise `YAW_SEARCH` turns at
+100 ms. A usable target enters centering immediately. Otherwise `YAW_SEARCH` turns at
 **15 deg/s positive body yaw** (counterclockwise from above), with level roll/pitch
 and the selected altitude held. The default scan takes about 24 s. It uses
 measured attitude to unwrap a net full circle, including across +/-180 degrees;
 command time alone cannot claim a complete scan. No XY truth is used.
 
-Only a fresh, current-episode, unclipped target with timestamp-aligned attitude
+A fresh, current-episode, unclipped target with timestamp-aligned attitude
 and bearing within the existing +/-35-degree azimuth and +/-60-degree elevation
-limits stops rotation. Edge/clipped/stale/out-of-envelope detections do not stop
-the scan. `YAW_SETTLE` holds the heading measured at detection, requiring yaw
-speed <=5 deg/s, heading error <=2 degrees and the existing altitude/vertical-speed/
-level-attitude tolerances continuously for **0.3 simulation seconds**. Losing
-the candidate resumes the remaining scan without resetting its angle or timer.
+limits switches the scan to `YAW_CENTER`. Edge/clipped/stale/out-of-envelope
+detections do not stop the scan. Yaw must bring the bbox center within **+/-10
+pixels of image width/2** before search can finish; a visible off-center target
+never starts LOS. `YAW_SETTLE` commands zero yaw rate and requires the target
+to remain in that band, yaw speed <=5 deg/s and the existing altitude/vertical-
+speed/level-attitude tolerances continuously for **0.3 simulation seconds**.
+Drift outside the band resumes centering and resets the dwell. Losing the
+candidate resumes the remaining scan without resetting its angle or timer.
 
 After settling, the app saves the current heading and transfers the existing
 filter/controller state to LOS. Only images captured after settling can enter
@@ -253,7 +257,7 @@ LOS acquisition, which still needs its normal dwell before approach. The drone
 does not return to its original heading, and yaw continues to hold the new
 heading during approach rather than center the bbox. A full circle without a
 usable target latches `search_exhausted`; **34 simulation seconds**, including
-settling interruptions, latches `search_timeout` if the scan cannot finish.
+centering and settling interruptions, latches `search_timeout` if the scan cannot finish.
 Both withdraw active RC and freeze the episode until a new Start/Reset.
 
 Mission diagnostics include `search_swept_deg`, `search_remaining_deg`,
@@ -262,3 +266,22 @@ Mission diagnostics include `search_swept_deg`, `search_remaining_deg`,
 search/settling and degrees; focused LOS telemetry remains inactive until
 acquisition. No new port or message version is introduced. Custom profiles must
 allow at least the 15 deg/s search rate; the app rejects incompatible limits.
+
+### Horizontal centering before acquisition
+
+The centering error is `bbox.x + bbox.width / 2 - image.width / 2`. At the
+default 640-pixel width the goal is X=320, within +/-10 pixels. Only horizontal
+centering is performed; altitude hold and level roll/pitch continue.
+
+`YAW_CENTER` uses `yaw_rate = -1.5 * atan(error_x / camera.fx_px)`, bounded to
++/-15 deg/s. A target on the right requests negative yaw, a target on the left
+requests positive yaw, and yaw slows as the target nears the center. Inside the
+band the yaw-rate reference is zero. Overshoot reverses the correction. Gain
+and tolerance are named constants in `bullet_app/search.py` for later tuning.
+
+Once centered and settled, save the new heading and run normal LOS acquisition
+using new post-settle images. Yaw centering does not continue during approach.
+The existing one-circle/34 s bounds and watchdogs remain active. Mission
+diagnostics add `target_center_x_px`, `image_center_x_px`, `target_error_x_px`,
+`target_center_tolerance_px` and `target_centered`; the commanded search yaw
+rate now reports the actual centering reference as well as the blind-scan rate.

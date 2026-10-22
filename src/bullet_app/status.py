@@ -4,6 +4,8 @@ from math import degrees
 
 REASON_MESSAGES = {
     'searching_target': 'rotating to find a target',
+    'centering_target': 'centering target horizontally with yaw',
+    'settling_centered_target': 'target centered; stopping and settling yaw',
     'settling_yaw': 'target found; braking and settling yaw',
     'search_exhausted': 'no usable target found in one full yaw circle',
     'search_timeout': 'yaw search exceeded its 34 s deadline',
@@ -56,11 +58,13 @@ def format_status(status):
     phase, reason = status['phase'], status['reason']
     d = status.get('diagnostics', {})
     rejection = rejection_message(d)
-    if phase in ('YAW_SEARCH', 'YAW_SETTLE'):
+    if phase in ('YAW_SEARCH', 'YAW_CENTER', 'YAW_SETTLE'):
         message = REASON_MESSAGES.get(reason, reason.replace('_', ' '))
         swept = d.get('search_swept_deg', 0.)
         rate = d.get('search_measured_yaw_rate_deg_s', 0.)
-        return f'{message}; swept {swept:.1f}/360 deg; yaw {rate:+.1f} deg/s' + ('; ' + rejection if rejection else '')
+        error = d.get('target_error_x_px')
+        centered = '' if error is None else f'; X error {error:+.1f} px (limit +/-{d.get("target_center_tolerance_px", 10.):g})'
+        return f'{message}{centered}; swept {swept:.1f}/360 deg; yaw {rate:+.1f} deg/s' + ('; ' + rejection if rejection else '')
     if phase == 'LOS_ACQUIRE':
         return 'Acquiring target' + (': ' + rejection if rejection else '; collecting consistent observations')
     if phase == 'FAULT':

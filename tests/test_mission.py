@@ -116,7 +116,7 @@ def test_sensor_only_physics_takeoff_hover_yaw_search(target_found):
         if target_found:
             assert {'YAW_SETTLE', 'LOS_ACQUIRE', 'LOS_APPROACH'} <= phases, (m.phase, m.reason)
             from math import degrees
-            assert 120 < degrees(m.hold.heading_rad) < 180
+            assert abs(abs(degrees(m.hold.heading_rad)) - 180) < 5
             assert m.nav_result.diagnostics.bearing_valid
             assert abs(rc['channels'][3] - 1500) < 5
         else:
@@ -159,7 +159,7 @@ def test_hover_reset_post_hover_identity_and_los_handoff():
     source = dict(f['source'], measurement_us=int((now + .01) * 1e6), episode_id='foreign')
     assert m._target((dict(source=source, sequence=2), (300, 260, 30, 25)), now + .01) is None
     prior_throttle = rc['channels'][2]
-    for offset in range(1, 80):
+    for offset in range(1, 180):
         step += 1
         now = 1000 + step / 240
         f = feedback(step, now, 20., armed=True, applied=rc['sequence'])

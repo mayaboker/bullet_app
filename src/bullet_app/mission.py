@@ -11,7 +11,7 @@ from los_tracking import (CameraCalibration, AltitudeHeadingHold, AttitudeSample
                           LosNavigator, NavigationInput, RcChannels, State, TargetObservation)
 from los_tracking.geometry import euler, wrap, world_bearing
 from .search import (YawSearch, SEARCH_RATE_RAD_S, SEARCH_TIMEOUT_S, YAW_SETTLE_DURATION_S,
-                     YAW_SETTLE_RATE_RAD_S, YAW_SETTLE_ERROR_RAD, ANGLE_EPSILON_RAD)
+                     YAW_SETTLE_RATE_RAD_S, TARGET_CENTER_TOLERANCE_PX, centering_command, ANGLE_EPSILON_RAD)
 
 
 TAKEOFF_HEIGHT_M = DEFAULT_TAKEOFF_HEIGHT_M
@@ -148,7 +148,7 @@ class Mission:
                     armed = True
                     if f['armed'] and f['mode'] == 'angle' and f['last_applied_sequence'] >= self.arm_sequence:
                         self.phase, self.reason = 'TAKEOFF', 'climbing'
-                if self.phase in ('TAKEOFF', 'HOVER', 'WAIT_TARGET', 'YAW_SEARCH', 'YAW_SETTLE', 'LOS_ACQUIRE', 'LOS_APPROACH'):
+                if self.phase in ('TAKEOFF', 'HOVER', 'WAIT_TARGET', 'YAW_SEARCH', 'YAW_CENTER', 'YAW_SETTLE', 'LOS_ACQUIRE', 'LOS_APPROACH'):
                     armed = True
                     if not self.hold.ready(now_s):
                         self.fail('sensors_stale')
@@ -211,46 +211,63 @@ class Mission:
 
         begin_los = False
         vision = {}
-        if self.phase in ('WAIT_TARGET', 'YAW_SEARCH', 'YAW_SETTLE'):
+        yaw_reference = None
+        if self.phase in ('WAIT_TARGET', 'YAW_SEARCH', 'YAW_CENTER', 'YAW_SETTLE'):
             candidate, vision = self._search_target(detection, now_s)
+            vision.update(target_center_x_px=None, image_center_x_px=self.config.camera.width_px / 2,
+                          target_error_x_px=None, target_center_tolerance_px=TARGET_CENTER_TOLERANCE_PX,
+                          target_centered=False)
             if self.phase == 'WAIT_TARGET':
                 if candidate is not None:
-                    begin_los = True
+                    self.search.start(sim)
+                    self.phase, self.reason = 'YAW_CENTER', 'centering_target'
                 elif self._target(detection, now_s) is not None or sim - self.hover_completed_sim >= TARGET_CHECK_DURATION_S:
                     self.search.start(sim)
                     self.phase, self.reason = 'YAW_SEARCH', 'searching_target'
             if self.phase == 'YAW_SEARCH':
                 if candidate is not None:
-                    self.hold.set_heading(yaw)
                     self.search.settled_sim = None
-                    self.phase, self.reason = 'YAW_SETTLE', 'settling_yaw'
+                    self.phase, self.reason = 'YAW_CENTER', 'centering_target'
                 elif self.search.exhausted:
                     self.fail('search_exhausted')
-            if self.phase == 'YAW_SETTLE':
+            if self.phase in ('YAW_CENTER', 'YAW_SETTLE'):
                 if candidate is None:
                     self.search.start(sim)  # Resume; retain the original angle and deadline.
                     self.phase, self.reason = 'YAW_SEARCH', 'searching_target'
                     if self.search.exhausted:
                         self.fail('search_exhausted')
                 else:
-                    settled = (level and abs(self.search.yaw_rate_rad_s) <= YAW_SETTLE_RATE_RAD_S
-                               and abs(wrap(yaw - self.hold.heading_rad)) <= YAW_SETTLE_ERROR_RAD)
-                    if not settled:
+                    error_px, yaw_reference = centering_command(candidate.bbox, self.config.camera)
+                    centered = abs(error_px) <= TARGET_CENTER_TOLERANCE_PX
+                    vision.update(target_center_x_px=candidate.bbox[0] + candidate.bbox[2] / 2,
+                                  target_error_x_px=error_px, target_centered=centered)
+                    if not centered:
                         self.search.settled_sim = None
-                    elif self.search.settled_sim is None:
-                        self.search.settled_sim = sim
-                    elif sim - self.search.settled_sim >= YAW_SETTLE_DURATION_S:
-                        self.hold.set_heading(yaw)
-                        begin_los = True
+                        self.phase, self.reason = 'YAW_CENTER', 'centering_target'
+                    else:
+                        self.phase, self.reason = 'YAW_SETTLE', 'settling_centered_target'
+                        settled = level and abs(self.search.yaw_rate_rad_s) <= YAW_SETTLE_RATE_RAD_S
+                        if not settled:
+                            self.search.settled_sim = None
+                        elif self.search.settled_sim is None:
+                            self.search.settled_sim = sim
+                        elif sim - self.search.settled_sim >= YAW_SETTLE_DURATION_S:
+                            self.hold.set_heading(yaw)
+                            begin_los = True
             if self.search.started_sim is not None and self.search.elapsed(sim) >= SEARCH_TIMEOUT_S:
                 self.fail('search_timeout')
                 begin_los = False
+            if self.phase == 'YAW_SEARCH':
+                yaw_reference = SEARCH_RATE_RAD_S
+            elif self.phase == 'FAULT':
+                yaw_reference = None
 
         command = self.hold.command(now_s=now_s, target_altitude_m=self.goal,
-                                   yaw_rate_rad_s=SEARCH_RATE_RAD_S if self.phase == 'YAW_SEARCH' else None)
+                                   yaw_rate_rad_s=yaw_reference)
         self.diagnostics = {**self.hold.control.last_diagnostics, **vision}
         if self.search.started_sim is not None:
-            self.diagnostics.update(self.search.diagnostics(sim, rotating=self.phase == 'YAW_SEARCH'))
+            self.diagnostics.update(self.search.diagnostics(sim, rotating=self.phase == 'YAW_SEARCH',
+                                                            commanded_yaw_rate_rad_s=yaw_reference or 0.))
         if begin_los and self.phase != 'FAULT':
             self.navigator.reset(handoff=self.hold.handoff(now_s=now_s, target_altitude_m=self.goal))
             self.los_started_us = now_us
