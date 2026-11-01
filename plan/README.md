@@ -23,7 +23,7 @@
 | [0019 MAVLink AGL telemetry](0019-mavlink-agl.md) | Publish physics rangefinder AGL over DISTANCE_SENSOR and retain it in flight feedback/MCAP. | Implemented; focused tests passed | `7a5774f` |
 | [0020 LOS roll alignment](0020-los-roll-alignment.md) | Preserve yaw-first centering and verify roll correction during LOS tracking. | Implemented; tests passed | `d58580a` |
 | [0021 TTC stability gating](0021-ttc-stability-gating.md) | Gate noisy TTC estimates before descent-feasibility control. | Implemented; tests passed | `504fc99`, `4241615`, `744968a` |
-| [0022 Runtime parameters](0022-runtime-parameters.md) | MAVLink parameter UI, live tuning and remote update logs. | Implemented; tests passed | Pending |
-| [0023 Status time and frame](0023-status-time-frame.md) | Show simulation seconds and camera sequence in status logs. | Implemented; 361 tests passed | Pending |
-| [0024 Recorded file origins](0024-recorded-profile-origins.md) | Save source profile/config filenames and show only application parameters in FlightLens. | Implemented; verification passed | Pending |
-| [0025 Heavy-quad descent limit](0025-heavy-quad-descent-limit.md) | Set both heavy-quad mission profiles to 5.5 m/s maximum commanded descent. | Implemented; profile loads and unchanged-value checks passed | Pending |
+| [0022 Runtime parameters](0022-runtime-parameters.md) | MAVLink parameter UI, live tuning and remote update logs. | Implemented; tests passed | `cb6e3bf6e3ac7dbebd38e9ec28cd5575fce8759d` |
+| [0023 Status time and frame](0023-status-time-frame.md) | Show simulation seconds and camera sequence in status logs. | Implemented; 361 tests passed | `cb6e3bf6e3ac7dbebd38e9ec28cd5575fce8759d` |
+| [0024 Recorded file origins](0024-recorded-profile-origins.md) | Save source profile/config filenames and show only application parameters in FlightLens. | Implemented; verification passed | `cb6e3bf6e3ac7dbebd38e9ec28cd5575fce8759d` |
+| [0025 Heavy-quad descent limit](0025-heavy-quad-descent-limit.md) | Set both heavy-quad mission profiles to 5.5 m/s maximum commanded descent. | Implemented; profile loads and unchanged-value checks passed | `8c47f8feecf28acc718d3dff57e24a779318b124` (workspace) |

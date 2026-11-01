@@ -40,7 +40,11 @@ tuning.max_descent_m_s=5.5. FlightLens Recording shows this application paramete
 This change does not modify the launcher's default profile selection.
 
 ## Status
-Implemented; both profile loads and unchanged-value checks passed. Not committed.
+Implemented; both profile loads and unchanged-value checks passed.
 
 ## Implementation commit
-Pending
+`8c47f8feecf28acc718d3dff57e24a779318b124`
+
+## Repository snapshot record
+Recorded snapshot: `8c47f8feecf28acc718d3dff57e24a779318b124` (workspace repository). This is the new local
+baseline containing the current implementation, not a recovered historical commit.

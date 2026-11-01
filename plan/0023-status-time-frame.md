@@ -22,7 +22,11 @@ distributions and wheels. No running mission was changed; no commit or push.
 Simulation time, not viewer wall time. Camera sequence, not control-tick or replay ordinal. No guessed metadata. Restart updated app/viewer once.
 
 ## Status
-Implemented; verification passed (not committed)
+Implemented; verification passed
 
 ## Implementation commit
-Pending
+`cb6e3bf6e3ac7dbebd38e9ec28cd5575fce8759d`
+
+## Repository snapshot record
+Recorded snapshot: `cb6e3bf6e3ac7dbebd38e9ec28cd5575fce8759d` (bullet_app repository). This is the new local
+baseline containing the current implementation, not a recovered historical commit.

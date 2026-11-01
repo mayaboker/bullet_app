@@ -27,7 +27,11 @@ changed; old recordings were not modified or assigned guessed filenames.
 Future recordings only; old MCAPs remain Not recorded. File names are provenance, not tunable controller settings. Effective parameters remain authoritative after runtime edits. No commits/pushes requested.
 
 ## Status
-Implemented; verification passed (not committed)
+Implemented; verification passed
 
 ## Implementation commit
-Pending
+`cb6e3bf6e3ac7dbebd38e9ec28cd5575fce8759d`
+
+## Repository snapshot record
+Recorded snapshot: `cb6e3bf6e3ac7dbebd38e9ec28cd5575fce8759d` (bullet_app repository). This is the new local
+baseline containing the current implementation, not a recovered historical commit.
