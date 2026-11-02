@@ -1,6 +1,6 @@
 # Plans
 
-[0026 Recording control](0026-recording-control.md) — Implemented; 173 application tests and installed roundtrip passed; commit Pending.
+[0026 Recording control](0026-recording-control.md) — Implemented; 173 application tests and installed roundtrip passed; commit `41ce23a7fbbc08f5e63f7b65faf6bb1a6ada9f72`.
 
 | Plan | Description | Status | Implementation commit |
 | --- | --- | --- | --- |
@@ -30,10 +30,10 @@
 | [0024 Recorded file origins](0024-recorded-profile-origins.md) | Save source profile/config filenames and show only application parameters in FlightLens. | Implemented; verification passed | `cb6e3bf6e3ac7dbebd38e9ec28cd5575fce8759d` |
 | [0025 Heavy-quad descent limit](0025-heavy-quad-descent-limit.md) | Set both heavy-quad mission profiles to 5.5 m/s maximum commanded descent. | Implemented; profile loads and unchanged-value checks passed | `8c47f8feecf28acc718d3dff57e24a779318b124` (workspace) |
 
-- [0027: Manual flight controls](0027-manual-flight-controls.md) — Implemented; 195 tests passed; commit Pending.
+- [0027: Manual flight controls](0027-manual-flight-controls.md) — Implemented; 195 tests passed; commit `41ce23a7fbbc08f5e63f7b65faf6bb1a6ada9f72`.
 
-- [0028: Manual workspace and recording controls](0028-recording-viewer-state.md) — Implemented; 196 tests passed; commit Pending.
+- [0028: Manual workspace and recording controls](0028-recording-viewer-state.md) — Implemented; 196 tests passed; commit `41ce23a7fbbc08f5e63f7b65faf6bb1a6ada9f72`.
 
-- [0029: Mission collision gates](0029-mission-collision-gates.md) — Implemented; 197 tests passed; commit Pending.
+- [0029: Mission collision gates](0029-mission-collision-gates.md) — Implemented; 197 tests passed; commit `41ce23a7fbbc08f5e63f7b65faf6bb1a6ada9f72`.
 
-- [0030: MSP diagnostic schema repair](0030-msp-parameter-diagnostics-schema.md) — Implemented; 7 tests passed; commit Pending.
+- [0030: MSP diagnostic schema repair](0030-msp-parameter-diagnostics-schema.md) — Implemented; 7 tests passed; commit `41ce23a7fbbc08f5e63f7b65faf6bb1a6ada9f72`.

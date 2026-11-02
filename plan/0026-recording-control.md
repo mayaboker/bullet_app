@@ -15,10 +15,10 @@ MAVLink dispatch, real recorder roundtrip, idempotency, wrong target, timeout,
 Godot rejection and existing app regressions.
 
 ## Status
-Implemented; verification passed. Not committed.
+Implemented; verification passed.
 
 ## Implementation commit
-Pending
+`41ce23a7fbbc08f5e63f7b65faf6bb1a6ada9f72`
 
 ## Verification results
 - 20 bringup tests passed: configuration/dry-run, process startup/failure/signals,
@@ -48,3 +48,13 @@ Pending
 
 Verification logs: /tmp/bringup-*-final.log; installed check:
 /tmp/bringup-installed-final.log. Local sources and wheel payloads were compared.
+
+## Commit record — 2026-11-02
+
+The verification notes above describe the pre-commit work. Implementation is
+now committed; nothing was pushed. These are implementation hashes, rather than
+the subsequent documentation commits that record them.
+
+| Repository | Implementation commit |
+|---|---|
+| bullet_app | `41ce23a7fbbc08f5e63f7b65faf6bb1a6ada9f72` |
