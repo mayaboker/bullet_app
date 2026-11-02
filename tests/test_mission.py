@@ -460,7 +460,8 @@ def test_betaflight_keeps_sensor_feedback_and_uses_msp_only_for_status():
     assert m.datum == 0.
     assert m.feedback['armed']
     m.observe_estimates(None)
-    assert not m.feedback['armed'] and m.arming_disabled_flags is None
+    assert m.feedback['armed'] and m.arming_disabled_flags is None
+    assert not m.msp_arming_valid
 
 
 def test_sensor_diagnostics_measure_feedback_rate_and_age():

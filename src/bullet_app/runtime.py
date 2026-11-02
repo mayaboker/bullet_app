@@ -1,6 +1,7 @@
 """Dedicated runtime workers; Bullet View owns camera visualization."""
 from pathlib import Path
 from bullet_msgs.provenance import revisions, configuration_files
+from bullet_msgs.recording_control import DEFAULT_STATE_ENDPOINT, DEFAULT_STATUS_ENDPOINT
 from threading import Event, Thread
 import time
 
@@ -13,6 +14,7 @@ from bullet_msgs.scenario import END_TOPIC, validate_end
 from los_tracking import NavigatorConfig
 from .blackboard import RuntimeBlackboard
 from .mission import Mission, COMMAND_PERIOD_S
+from .flight_control import FlightControl, FlightSession
 from .los_telemetry import LosTelemetryScheduler
 from .mavlink_adapter import MavlinkAdapter
 from .parameters import apply_request
@@ -65,7 +67,28 @@ class DetectorRuntime:
 
     def run(self):
         receiver = publisher = None
+        stop = Event()
+        board = RuntimeBlackboard()
+        mavlink = thread = None
+        errors = []
         try:
+            # Detection-only hardware runs still own a MAVLink recording control link.
+            if getattr(self.options, 'recording_control_source', None) is not None:
+                mavlink = MavlinkAdapter(self.options.mavlink_endpoint, board, stop,
+                    control_endpoint=self.options.mavlink_control_endpoint,
+                    recording_control_source=self.options.recording_control_source,
+                    recording_state_endpoint=self.options.recording_state_endpoint,
+                    recording_status_endpoint=self.options.recording_status_endpoint)
+                mavlink.open()
+                def run_control():
+                    try:
+                        mavlink.run()
+                    except Exception as error:
+                        logger.exception('Detector MAVLink control failed')
+                        errors.append(error)
+                        stop.set()
+                thread = Thread(target=run_control, name='detector-mavlink')
+                thread.start()
             publisher = BboxPublisher(self.options.bbox_endpoint)
             receiver = VisualReceiver(self.options.visual_endpoint)
             bbox = last_frame = None
@@ -73,7 +96,7 @@ class DetectorRuntime:
             sequence = 0
             logger.info("Subscribed to visual detections on {}", self.options.visual_endpoint)
             logger.info("Publishing tracking/front/bbox on {}", self.options.bbox_endpoint)
-            while True:
+            while not stop.is_set():
                 result = receiver.poll()
                 now = time.monotonic()
                 if result is not None:
@@ -81,6 +104,7 @@ class DetectorRuntime:
                     metadata = dict(result)
                     metadata['version'] = result['schema_version']
                     publisher.publish(metadata, bbox_tuple(bbox), result['image_topic'])
+                    board.write_vision((metadata, bbox_tuple(bbox)), (None, bbox_tuple(bbox)), now)
                     sequence = result['sequence']
                     last_frame = now
                 status = "Waiting for detections" if last_frame is None else ("Live" if now - last_frame < 1 else "Stale")
@@ -93,11 +117,18 @@ class DetectorRuntime:
         except KeyboardInterrupt:
             pass
         finally:
+            stop.set()
+            if thread is not None:
+                thread.join(THREAD_JOIN_TIMEOUT_S)
+                if thread.is_alive():
+                    errors.append(RuntimeError('Detector MAVLink did not stop'))
+            if mavlink is not None:
+                mavlink.close()
             if receiver is not None:
                 receiver.close()
             if publisher is not None:
                 publisher.close()
-        return 0
+        return 1 if errors else 0
 
 
 def bbox_tuple(value):
@@ -108,12 +139,18 @@ class MissionRuntime:
     def __init__(self, transport, config, *, bbox_endpoint, image_topic='camera/front/image',
                  visual_endpoint=DEFAULT_VISUAL_ENDPOINT, hover_check=False,
                  mavlink_endpoint=None, mavlink_control_endpoint=MAVLINK_CONTROL_ENDPOINT,
-                 mission_config=None, transport_config=None):
+                 mission_config=None, transport_config=None, recording_control_source=None,
+                 recording_state_endpoint=DEFAULT_STATE_ENDPOINT,
+                 recording_status_endpoint=DEFAULT_STATUS_ENDPOINT, arming_mode='automatic'):
         self.transport, self.config = transport, config
         self.bbox_endpoint, self.visual_endpoint, self.image_topic = bbox_endpoint, visual_endpoint, image_topic
         self.hover_check = hover_check
+        self.flight_session = FlightSession(arming_mode=arming_mode)
+        self.flight_control = FlightControl()
         self.mavlink_endpoint = mavlink_endpoint
         self.mavlink_control_endpoint = mavlink_control_endpoint
+        self.recording_options = dict(recording_control_source=recording_control_source,
+            recording_state_endpoint=recording_state_endpoint, recording_status_endpoint=recording_status_endpoint)
         self.mission_config = mission_config
         self.config_files = configuration_files(mission_profile=mission_config, transport_config=transport_config)
         self.stop = Event()
@@ -129,7 +166,9 @@ class MissionRuntime:
     def start(self):
         if self.mavlink_endpoint is not None:
             self.mavlink = MavlinkAdapter(self.mavlink_endpoint, self.blackboard, self.stop,
-                                          control_endpoint=self.mavlink_control_endpoint, parameter_config=self.config)
+                                          control_endpoint=self.mavlink_control_endpoint, parameter_config=self.config,
+                                          flight_control=self.flight_control,
+                                          **self.recording_options)
             self.mavlink.open()
             self.mavlink_thread = Thread(name='bullet-mavlink', target=self._run_mavlink, daemon=True)
             self.mavlink_thread.start()
@@ -224,7 +263,7 @@ class MissionRuntime:
         return metadata, bbox
 
     def _control(self):
-        mission = Mission(self.config, hover_check=self.hover_check)
+        mission = Mission(self.config, hover_check=self.hover_check, flight_session=self.flight_session)
         applied_platform_config = None
         last_command = None
         los_telemetry = LosTelemetryScheduler()
@@ -258,7 +297,8 @@ class MissionRuntime:
                         else:
                             try:
                                 new_config = NavigatorConfig.from_yaml(self.mission_config)
-                                new_mission = Mission(new_config, hover_check=self.hover_check)
+                                new_mission = Mission(new_config, hover_check=self.hover_check,
+                                                      flight_session=self.flight_session)
                                 if applied_platform_config is not None:
                                     new_mission.configure(applied_platform_config)
                                 if msp is not None and new_config.control != self.config.control:
@@ -295,7 +335,11 @@ class MissionRuntime:
                         msp_status = msp_status_from_snapshot(msp_snapshot)
                         mission.observe_estimates(msp_snapshot)
                         now = time.monotonic()
+                    self.flight_control.update(mission, now)
+                    if msp is not None:
+                        msp.set_emergency(self.flight_session.emergency_identity is not None)
                     command = mission.tick(now_s=now, detection=detection)
+                    self.flight_control.publish(mission, now)
                     if command is not None and (now - last_config <= CONFIG_TIMEOUT_S or mission.feedback['state'] == 'running'):
                         if now - last_config > CONFIG_TIMEOUT_S:
                             command['active'] = False
@@ -416,7 +460,11 @@ class MissionRunner:
                                  mavlink_endpoint=self.options.mavlink_endpoint,
                                  mavlink_control_endpoint=self.options.mavlink_control_endpoint,
                                  mission_config=self.options.mission_config,
-                                 transport_config=self.options.transport_config)
+                                 transport_config=self.options.transport_config,
+                                 recording_control_source=self.options.recording_control_source,
+                                 recording_state_endpoint=self.options.recording_state_endpoint,
+                                 recording_status_endpoint=self.options.recording_status_endpoint,
+                                 arming_mode=self.options.arming_mode)
         try:
             runtime.start()
             from .status import format_status, status_key

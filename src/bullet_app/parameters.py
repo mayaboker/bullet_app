@@ -167,7 +167,8 @@ def apply_request(runtime, mission, request, platform, msp, now_s, revisions):
                 mission.hold.apply_live_tuning(candidate.tuning)
                 mission.config = candidate
             else:
-                replacement = Mission(candidate, hover_check=runtime.hover_check)
+                replacement = Mission(candidate, hover_check=runtime.hover_check,
+                                      flight_session=mission.flight_session)
                 if platform is not None:
                     replacement.configure(platform)
                 new_msp = msp

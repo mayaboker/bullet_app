@@ -22,6 +22,7 @@ RC_CHANNEL_COUNT = 18
 RC_AETR_CHANNEL_COUNT = 4
 RC_ARM_MODE_CHANNEL_COUNT = 2
 RC_RATE_HZ = 50
+SET_ARMING_DISABLED = 99
 RC_PERIOD_S = 1 / RC_RATE_HZ
 SAFE_RC_COMMAND = (
     RC_NEUTRAL_PWM, RC_NEUTRAL_PWM, RC_MIN_PWM, RC_NEUTRAL_PWM,
@@ -66,6 +67,8 @@ class MspScheduler:
         self.firmware = None
         self.error = None
         self.thread = None
+        self.emergency = None
+        self.applied_emergency = None
 
     def start(self):
         self.thread = Thread(target=self._run, name='msp-rc', daemon=True)
@@ -76,6 +79,23 @@ class MspScheduler:
         pack_rc(command)
         with self.lock:
             self.command = command
+
+    def set_emergency(self, disabled):
+        with self.lock:
+            # Do not change firmware arming flags in ordinary legacy operation.
+            if disabled or self.emergency is not None:
+                self.emergency = disabled
+            if disabled:
+                self.command = SAFE_RC_COMMAND
+                self.client.rc.clear()
+                self.client.rc.update(SAFE_RC_COMMAND)
+
+    def _apply_emergency(self):
+        with self.lock:
+            desired = self.emergency
+        if desired is not None and desired != self.applied_emergency:
+            self.client.request(SET_ARMING_DISABLED, bytes((int(desired), 0)))
+            self.applied_emergency = desired
 
     def reset(self):
         with self.lock:
@@ -97,7 +117,7 @@ class MspScheduler:
             if not self.client.connected.is_set() or self.rc_generation != self.client.generation:
                 self.command = SAFE_RC_COMMAND
                 self.rc_generation = self.client.generation
-            command = self.command
+            command = SAFE_RC_COMMAND if self.emergency else self.command
         if self.client.connected.is_set():
             self.client.rc.update(command)
 
@@ -116,6 +136,7 @@ class MspScheduler:
             self.firmware = {key: list(value) for key, value in firmware.items()}
             self.status = self.attitude = self.altitude = None
             self.generation = connection_generation
+            self.applied_emergency = None
 
     def _read(self, name):
         self._identify()
@@ -132,7 +153,7 @@ class MspScheduler:
             self.error = None
 
     def _run(self):
-        tasks = ((RC_PERIOD_S, 'rc'), (STATUS_PERIOD_S, 'status'),
+        tasks = ((RC_PERIOD_S, 'rc'), (RC_PERIOD_S, 'emergency'), (STATUS_PERIOD_S, 'status'),
                  (ATTITUDE_PERIOD_S, 'attitude'), (ALTITUDE_PERIOD_S, 'altitude'))
         due = [(time.monotonic(), index, period, name)
                for index, (period, name) in enumerate(tasks)]
@@ -144,6 +165,9 @@ class MspScheduler:
             try:
                 if name == 'rc':
                     self._deliver()
+                elif name == 'emergency' and self.client.connected.is_set():
+                    self._identify()
+                    self._apply_emergency()
                 elif self.client.connected.is_set():
                     self._read(name)
             except (MspError, TimeoutError, ValueError, OSError) as error:
@@ -210,6 +234,9 @@ class MspFlight:
     def update(self, channels):
         if self.client.connected.is_set() and self.scheduler.generation == self.client.generation:
             self.scheduler.update(channels)
+
+    def set_emergency(self, disabled):
+        self.scheduler.set_emergency(disabled)
 
     def close(self):
         self.scheduler.close()

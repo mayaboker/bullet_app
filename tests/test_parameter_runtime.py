@@ -204,3 +204,16 @@ def test_source_profile_paths_are_recorded_and_survive_runtime_edits(tmp_path):
     changed=runtime.blackboard.take_publication_inputs().config_snapshot.value
     assert changed['files']==periodic['files']
     assert changed['settings']['tuning']['azimuth_kp']==1.5
+
+
+def test_stopped_parameter_replacement_preserves_manual_run_state():
+    runtime,mission,service=setup_runtime()
+    mission.phase='READY';mission.feedback['state']='stopped'
+    session=mission.flight_session
+    session.operator_control=True
+    session.height_override_m=5.5
+    session.emergency_identity=('physics','episode','stream')
+    replacement,_=apply_request(runtime,mission,ParameterRequest(BY_PATH['tuning.roll_limit_rad'].id,.3,(255,190)),None,None,10.,{})
+    assert replacement is not mission and replacement.flight_session is session
+    assert replacement.takeoff_height_m==5.5 and session.operator_control
+    assert session.emergency_identity==('physics','episode','stream')

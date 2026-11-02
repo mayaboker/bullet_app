@@ -491,3 +491,53 @@ MAVLink tuning catalog. Runtime edits change effective settings but do not chang
 the originally loaded filename. Programmatic runtimes can omit unknown paths.
 FlightLens shows the recorded names and only the application/LOS parameter table;
 older MCAPs without these fields remain explicitly unavailable.
+
+## Production recording control
+
+The production launcher selects `recorder.control_source: mavlink` or `godot`.
+MAVLink control is supported in both detection-only and mission-enabled modes.
+COMMAND_LONG command **31011 (MAV_CMD_USER_2)** targets application system/component
+1/1: param1 is 1 to start or 0 to stop, and parameters 2–7 are zero. The existing
+MAVLink control connection is used (default UDP 14551). Success is acknowledged
+after the recorder confirms opening/finalization, with a five-second confirmation
+timeout. Recording commands do not start/stop flight or application processes.
+Bullet View provides Start/Stop recording buttons and actual recording-state
+readback. ACK `result_param2` identifies Start=1 and Stop=2, allowing Stop to
+cancel Start without accepting its delayed ACK. See the shared
+[recording viewer protocol](../bullet_msgs/docs/recording-viewer-control.md).
+Godot mode denies them and leaves recording controlled by simulation state.
+
+Standalone opt-in flags are `--recording-control-source mavlink|godot`,
+`--recording-state-endpoint` (default loopback 5561), and
+`--recording-status-endpoint` (default loopback 5562). Omitting the source preserves
+existing behavior. MAVLink mode requires a recorder using its dedicated recording
+control mode. The detection-only runtime starts a MAVLink scheduler when this
+feature is configured. See the [production guide](../../docs/production-bringup.md).
+
+### Manual Arm and Start
+
+Add `--arming-mode manual` to the existing `--mission-config` command to wait
+for operator commands. The default `automatic` preserves simulation startup.
+In a simulator, first start the Godot/physics session so the app has fresh owned
+feedback; this starts the session, while the manual app keeps motors disarmed.
+In Bullet View, select/apply a height, **Arm**, wait for **armed idle**, then
+**Start mission**. Arm holds neutral sticks and minimum throttle until Start.
+The height is metres above the captured launch datum, not global altitude.
+
+Manual Arm does not enable simulator collision termination. Start mission enables
+target hits; terrain crashes become terminal only after the drone lifts clear
+of the terrain by 0.20 m. Physical terrain contact remains active throughout.
+Restart the full simulator/app/renderer stack after updating this protocol.
+
+A manual Arm or Disarm takes operator control until app restart, including across
+profile reloads and episode resets. Disarm stays latched. During flight Disarm
+requires explicit emergency confirmation, aborts mission output and asks the
+backend to disarm. Stop/reset and normal prearm readiness are required before
+rearming. Missing/stale backend status is unknown; command transmission alone
+never confirms arming. Detection-only mode cannot arm.
+
+An applied height overrides scenario/default height for the app run and survives
+reload/reset; flight locks the selected value. Remote ACKs, outcomes and captured
+height/source are logged. See
+[the shared flight protocol](../bullet_msgs/docs/manual-flight-control.md) for
+commands, state values, timeouts and MSP behavior.

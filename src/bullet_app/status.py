@@ -3,6 +3,11 @@ from math import degrees
 
 
 REASON_MESSAGES = {
+    'waiting_operator': 'disarmed idle; waiting for operator Arm',
+    'waiting_mission_start': 'armed idle at minimum throttle; waiting for Start mission',
+    'operator_disarmed': 'operator requested disarm; automatic arming remains disabled',
+    'operator_arm': 'operator Arm requested; waiting for backend confirmation',
+    'operator_emergency_disarm': 'operator emergency disarm; stop/reset before rearming',
     'searching_target': 'rotating to find a target',
     'centering_target': 'centering target horizontally with yaw',
     'settling_centered_target': 'target centered; stopping and settling yaw',

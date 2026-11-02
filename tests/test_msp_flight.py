@@ -139,3 +139,22 @@ def test_episode_change_clears_cached_telemetry():
     flight.set_episode('next')
 
     assert flight.snapshot() == (None, None, None)
+
+
+def test_emergency_force_request_runs_on_scheduler_and_overrides_rc():
+    flight, client, _ = flight_with_client()
+    requests=[]
+    client.request=lambda command,payload: requests.append((command,payload))
+    flight.scheduler.generation=client.generation
+    flight.update((1500,1500,1800,1500,2000,2000)+(1000,)*12)
+    flight.set_emergency(True)
+    assert client.channels==SAFE_RC_COMMAND
+    assert requests==[]  # owner thread never blocks on MSP request
+    flight.scheduler._apply_emergency()
+    assert requests==[(99,b'\x01\x00')]
+    flight.update((1500,1500,1800,1500,2000,2000)+(1000,)*12)
+    flight.scheduler._deliver()
+    assert client.channels==SAFE_RC_COMMAND
+    flight.set_emergency(False)
+    flight.scheduler._apply_emergency()
+    assert requests[-1]==(99,b'\x00\x00')

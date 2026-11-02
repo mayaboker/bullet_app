@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import click
+from bullet_msgs.recording_control import DEFAULT_STATE_ENDPOINT, DEFAULT_STATUS_ENDPOINT
 
 
 DEFAULT_BBOX_ENDPOINT = "tcp://127.0.0.1:5558"
@@ -23,6 +24,10 @@ class AppOptions:
     visual_endpoint: str = DEFAULT_VISUAL_ENDPOINT
     mavlink_endpoint: str | None = DEFAULT_MAVLINK_ENDPOINT
     mavlink_control_endpoint: str | None = DEFAULT_MAVLINK_CONTROL_ENDPOINT
+    recording_control_source: str | None = None
+    recording_state_endpoint: str = DEFAULT_STATE_ENDPOINT
+    recording_status_endpoint: str = DEFAULT_STATUS_ENDPOINT
+    arming_mode: str = 'automatic'
 
 
 @click.command()
@@ -40,13 +45,21 @@ class AppOptions:
               help="Pymavlink output for mission telemetry")
 @click.option("--mavlink-control-endpoint", default=DEFAULT_MAVLINK_CONTROL_ENDPOINT, show_default=True,
               help="Pymavlink input for parameter management and stop-only profile reload")
+@click.option('--recording-control-source', type=click.Choice(['mavlink', 'godot']), default=None,
+              help='Explicit recording authority; omitted preserves existing behavior')
+@click.option('--recording-state-endpoint', default=DEFAULT_STATE_ENDPOINT, show_default=True)
+@click.option('--recording-status-endpoint', default=DEFAULT_STATUS_ENDPOINT, show_default=True)
+@click.option('--arming-mode', type=click.Choice(['automatic', 'manual']), default='automatic', show_default=True,
+              help='Manual requires separate Arm and Start mission commands')
 def command(transport_config, topic, debug, bbox_endpoint, visual_endpoint, mission_config, hover_check, mavlink_endpoint,
-            mavlink_control_endpoint):
+            mavlink_control_endpoint, recording_control_source, recording_state_endpoint, recording_status_endpoint,
+            arming_mode):
     """Receive Bullet camera images through bullet_visual and publish recorder/mission telemetry."""
     if hover_check and mission_config is None:
         raise click.UsageError("--hover-check requires --mission-config")
     return AppOptions(transport_config, topic, debug, bbox_endpoint, mission_config, hover_check, visual_endpoint,
-                      mavlink_endpoint, mavlink_control_endpoint)
+                      mavlink_endpoint, mavlink_control_endpoint, recording_control_source,
+                      recording_state_endpoint, recording_status_endpoint, arming_mode)
 
 
 class CliParser:

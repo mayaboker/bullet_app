@@ -77,3 +77,24 @@ def test_blackboard_keeps_latest_publication_state_and_bounded_events():
 
     board.acknowledge_final_disarm()
     assert board.take_publication_inputs().final_disarm is None
+
+
+def test_all_runtime_publication_diagnostics_fit_recorded_msp_schema():
+    """Derive keys from the producer, so new queue diagnostics cannot silently drift."""
+    import json
+    from bullet_msgs import schema_bytes
+    from jsonschema import Draft202012Validator
+    from bullet_app.runtime import publication_diagnostics
+    board=RuntimeBlackboard()
+    # Include a real parameter queue overflow, not only an all-zero snapshot.
+    for index in range(OUTPUT_EVENT_QUEUE_CAPACITY+2):
+        board.enqueue_parameters({'sequence':index},1.)
+    health=board.publication_health()
+    actual=publication_diagnostics(health)
+    assert actual['output_parameters_queue_depth']==OUTPUT_EVENT_QUEUE_CAPACITY
+    assert actual['output_dropped_parameters']==2
+    schema=json.loads(schema_bytes('analysis_msp.json'))['properties']['sensor_feedback']
+    value=dict(window_s=1.,expected_hz=120.,observed_hz=120.,feedback_age_s=.001,
+        attitude_age_s=.001,barometer_age_s=.001,image_age_s=None,image_attitude_offset_s=None,
+        vision_reason=None,mission_phase='ARMED_IDLE',**actual)
+    Draft202012Validator(schema).validate(value)

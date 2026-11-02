@@ -10,7 +10,15 @@ from pymavlink import mavutil
 from bullet_msgs.status_messages import (MAV_SEVERITY_ERROR, STATUS_MESSAGE_BY_KEY,
                                          status_text_chunks)
 from bullet_msgs.mavlink_control import (RELOAD_PROFILE_ACK_ACCEPTED, RELOAD_PROFILE_ACK_DENIED,
-                                         RELOAD_PROFILE_COMMAND, RELOAD_PROFILE_PARAMETER)
+                                         RELOAD_PROFILE_COMMAND, RELOAD_PROFILE_PARAMETER,
+                                         RECORDING_CONTROL_COMMAND)
+from bullet_msgs.recording_control import DEFAULT_STATE_ENDPOINT, DEFAULT_STATUS_ENDPOINT
+from .recording_control import RecordingBridge
+from bullet_msgs.mavlink_control import (RECORDING_NAMES, RECORDING_STATES,
+    RECORDING_AUTH_NONE, RECORDING_AUTH_MAVLINK, RECORDING_AUTH_GODOT)
+from bullet_msgs.recording_control import STATE_TIMEOUT_S
+from bullet_msgs.flight_control import FLIGHT_COMMANDS, FLIGHT_NAMES, STATE_STALE_S, parse_command
+from .flight_control import FlightControl
 from bullet_msgs.parameters import use_mavlink2
 from .parameters import ParameterService
 from .status import format_status, status_key
@@ -59,19 +67,25 @@ class MavlinkAdapter:
     """Own MAVLink telemetry/control connections and read blackboard feedback."""
     def __init__(self, endpoint, blackboard, stop, *, control_endpoint=None,
                  connection_factory=mavutil.mavlink_connection,
-                 clock=time.monotonic, parameter_config=None):
+                 clock=time.monotonic, parameter_config=None, recording_control_source=None,
+                 recording_state_endpoint=DEFAULT_STATE_ENDPOINT,
+                 recording_status_endpoint=DEFAULT_STATUS_ENDPOINT, flight_control=None):
         self.endpoint = endpoint
         self.control_endpoint = control_endpoint
         self.blackboard = blackboard
         self.stop = stop
         self.connection_factory = connection_factory
         self.clock = clock
+        self.flight_control = flight_control or FlightControl()
         self.connection = None
         self.control_connection = None
         self.reload_requested = Event()
         self.reload_replies = Queue(RELOAD_REPLY_CAPACITY)
         self.last_status_key = None
         self.parameters = None if parameter_config is None else ParameterService(parameter_config)
+        self.recording_control_source = recording_control_source
+        self.recording = (RecordingBridge(recording_state_endpoint, recording_status_endpoint, clock=clock)
+                          if recording_control_source == 'mavlink' else None)
 
     def open(self):
         self.connection = self.connection_factory(self.endpoint, source_system=SYSTEM_ID,
@@ -86,10 +100,24 @@ class MavlinkAdapter:
             use_mavlink2(self.control_connection, SYSTEM_ID, COMPONENT_ID)
 
     def close(self):
-        if self.connection is not None:
-            self.connection.close()
-        if self.control_connection is not None:
-            self.control_connection.close()
+        if self.recording is not None:
+            self.recording.abort_pending()
+            while self.recording.replies and self.control_connection is not None and self.connection is not None:
+                requester, result, text, action = self.recording.replies.popleft()
+                try:
+                    self._recording_ack(requester, result, text, action)
+                except Exception:
+                    logger.exception('Could not send final recording acknowledgment')
+        try:
+            if self.recording is not None:
+                self.recording.close()
+        finally:
+            try:
+                if self.connection is not None:
+                    self.connection.close()
+            finally:
+                if self.control_connection is not None:
+                    self.control_connection.close()
 
     def take_reload_request(self):
         requested = self.reload_requested.is_set()
@@ -117,10 +145,28 @@ class MavlinkAdapter:
                 if feedback is not None:
                     self._send_telemetry(feedback.value)
                 self._send_bbox(now_s)
+                self._send_flight_state(now_s)
+                self._send_recording_state(now_s)
                 next_telemetry = self._next_deadline(next_telemetry, TELEMETRY_PERIOD_S, now_s)
             self.stop.wait(SCHEDULER_POLL_S)
 
     def _poll_control(self):
+        while True:
+            try:
+                command, requester, result, text, action_id = self.flight_control.replies.get_nowait()
+            except Empty:
+                break
+            self.control_connection.mav.command_ack_send(command, result, 0, action_id, *requester)
+            self.connection.mav.statustext_send(6 if result == 0 else 3, text.encode()[:50])
+        if self.recording is not None:
+            self.recording.poll()
+            while self.recording.notices:
+                value = self.recording.notices.popleft()
+                logger.info('Recorder {} path={} error={}', value['state'], value['path'], value['error'])
+                self.connection.mav.statustext_send(6, ('Recorder '+value['state']).encode())
+            while self.recording.replies:
+                requester, result, text, action = self.recording.replies.popleft()
+                self._recording_ack(requester, result, text, action)
         if self.control_connection is None:
             return
         try:
@@ -140,13 +186,76 @@ class MavlinkAdapter:
                     and command.target_component in (0, COMPONENT_ID)):
                 self.parameters.handle(command, self.control_connection.mav)
             return
-        if (command.command != RELOAD_PROFILE_COMMAND
-                or command.target_system not in (0, SYSTEM_ID)
-                or command.target_component not in (0, COMPONENT_ID)
-                or abs(command.param1 - RELOAD_PROFILE_PARAMETER) > 1e-6):
+        if command.command in FLIGHT_COMMANDS:
+            # Flight commands require the exact app target, never broadcast.
+            if (command.target_system, command.target_component) != (SYSTEM_ID, COMPONENT_ID):
+                return
+            requester = command.get_srcSystem(), command.get_srcComponent()
+            try:
+                action, value = parse_command(command.command,
+                    [getattr(command, f'param{i}') for i in range(1, 8)])
+                if self.parameters is None:
+                    raise ValueError('No flight session; detection-only mode')
+            except ValueError as error:
+                request = (command.command, 'invalid', None, requester, self.clock())
+                self.flight_control.reply(request, mavutil.mavlink.MAV_RESULT_DENIED, str(error))
+            else:
+                self.flight_control.submit(command.command, action, value, requester, self.clock())
+            return
+        if command.command == RECORDING_CONTROL_COMMAND:
+            if command.target_system not in (0, SYSTEM_ID) or command.target_component not in (0, COMPONENT_ID):
+                return
+            requester = (command.get_srcSystem(), command.get_srcComponent())
+            if self.recording_control_source == 'godot':
+                self._recording_ack(requester, mavutil.mavlink.MAV_RESULT_DENIED, 'Recording controlled by Godot')
+            elif self.recording is None:
+                self._recording_ack(requester, mavutil.mavlink.MAV_RESULT_UNSUPPORTED, 'Recording control is not configured')
+            elif (not isfinite(command.param1) or min(abs(command.param1), abs(command.param1-1)) > 1e-6
+                  or any(not isfinite(getattr(command, f'param{i}')) or abs(getattr(command, f'param{i}')) > 1e-6 for i in range(2, 8))):
+                self._recording_ack(requester, mavutil.mavlink.MAV_RESULT_DENIED, 'Invalid recording command parameters')
+            else:
+                self.recording.request(command.param1 > .5, requester)
+            return
+        if command.target_system not in (0, SYSTEM_ID) or command.target_component not in (0, COMPONENT_ID):
+            return
+        if command.command != RELOAD_PROFILE_COMMAND:
+            self.control_connection.mav.command_ack_send(command.command, mavutil.mavlink.MAV_RESULT_UNSUPPORTED)
+            return
+        if not isfinite(command.param1) or abs(command.param1 - RELOAD_PROFILE_PARAMETER) > 1e-6:
             self._send_reload_ack(RELOAD_PROFILE_ACK_DENIED, 'unsupported reload command')
             return
+        if self.recording_control_source is not None and self.parameters is None:
+            self._send_reload_ack(mavutil.mavlink.MAV_RESULT_DENIED, 'Mission profile is not configured')
+            return
         self.reload_requested.set()
+
+    def _recording_ack(self, requester, result, text, action=0):
+        self.control_connection.mav.command_ack_send(RECORDING_CONTROL_COMMAND, result, 0, action, *requester)
+        logger.info('Recording command result={} {}', result, text)
+        self.connection.mav.statustext_send(6 if result == 0 else 3, text.encode('utf-8')[:50])
+
+    def _send_recording_state(self, now_s):
+        authority = (RECORDING_AUTH_MAVLINK if self.recording_control_source == 'mavlink' else
+                     RECORDING_AUTH_GODOT if self.recording_control_source == 'godot' else RECORDING_AUTH_NONE)
+        state = RECORDING_STATES['unknown']
+        if self.recording is not None:
+            latest = self.recording.latest_status
+            if (latest is not None and 0 <= now_s - self.recording.status_received_at <= STATE_TIMEOUT_S
+                    and 0 <= now_s - latest['issued_ms'] / 1000 <= STATE_TIMEOUT_S):
+                state = RECORDING_STATES[latest['state']]
+        stamp = int(now_s * 1000) % 2**32
+        for name, value in zip(RECORDING_NAMES, (authority, state)):
+            self.connection.mav.named_value_float_send(stamp, name.encode(), float(value))
+
+    def _send_flight_state(self, now_s):
+        state = self.flight_control.snapshot()
+        fresh = state.valid and 0 <= now_s - state.received_at_s <= STATE_STALE_S
+        values = (float(state.armed) if fresh else UNKNOWN_FLOAT, float(fresh),
+                  float(state.readiness) if fresh else 0.,
+                  state.height_m if fresh and state.height_m is not None else UNKNOWN_FLOAT)
+        stamp = int(now_s * 1000) % 2**32
+        for name, value in zip(FLIGHT_NAMES, values):
+            self.connection.mav.named_value_float_send(stamp, name.encode(), value)
 
     def reply_reload(self, accepted, message):
         try:

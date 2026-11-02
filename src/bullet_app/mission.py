@@ -6,13 +6,15 @@ from bullet_msgs.scenario import validate_end
 from bullet_msgs.spawn import DEFAULT_TAKEOFF_HEIGHT_M
 from math import isclose, radians
 from uuid import uuid4
+from loguru import logger
 
 from bullet_msgs.flight import validate_config, validate_feedback, COMMAND_LIFETIME_US
 from los_tracking import (CameraCalibration, AltitudeHeadingHold, AttitudeSample, BarometerSample,
                           LosNavigator, NavigationInput, ControlDemand, State, TargetObservation)
 from los_tracking.geometry import euler, wrap, world_bearing, box_edges
-from .rc import calibrate_betaflight_hover, encode_demand, ANGLE_SCALE_RAD, YAW_RATE_SCALE_RAD_S
+from .rc import calibrate_betaflight_hover, encode_demand, ANGLE_SCALE_RAD, YAW_RATE_SCALE_RAD_S, RC_CENTRE, RC_MIN
 from .controller import TakeoffController
+from .flight_control import FlightSession
 from .search import (YawSearch, SEARCH_RATE_RAD_S, YAW_SETTLE_DURATION_S,
                      YAW_SETTLE_RATE_RAD_S, TARGET_CENTER_TOLERANCE_PX, centering_command, ANGLE_EPSILON_RAD)
 
@@ -33,6 +35,7 @@ BETAFLIGHT_ALTITUDE_TOLERANCE_M = 0.5
 VERTICAL_SPEED_TOLERANCE_M_S = 0.2
 ATTITUDE_TOLERANCE_RAD = radians(5)
 FEEDBACK_TIMEOUT_S = 0.1
+MSP_STATUS_TIMEOUT_S = .2
 COMMAND_PERIOD_S = 0.01
 # Leave one tick for scheduling jitter and transport after the next control tick.
 COMMAND_HORIZON_S = 2 * COMMAND_PERIOD_S
@@ -44,12 +47,15 @@ DISARMED_AETR = ControlDemand(0., 0., 0., 0.)
 
 
 class Mission:
-    def __init__(self, config, *, app_id=None, hover_check=False):
+    def __init__(self, config, *, app_id=None, hover_check=False, flight_session=None):
         if config.tuning.yaw_rate_limit_rad_s < SEARCH_RATE_RAD_S:
             raise ValueError('yaw search requires a yaw limit of at least 15 deg/s')
         self.config = config
         self.hover_check = hover_check
         self.app_id = app_id or uuid4().hex
+        self.flight_session = flight_session or FlightSession()
+        self.msp_arming_valid = False
+        self.arming_observed_at_s = float('-inf')
         self.platform = self.feedback = None
         self.sequence = 0
         self.identity = None
@@ -58,6 +64,8 @@ class Mission:
         self._reset()
 
     def _reset(self):
+        self.flight_session.mission_started = False
+        self.flight_session.arm_requested = False
         self.diagnostics = {}
         self.terminal_result = None
         self.hold = AltitudeHeadingHold(self.config)
@@ -68,7 +76,8 @@ class Mission:
         self.takeoff_active = False
         self.navigator = LosNavigator(self.config)
         self.datum = self.goal = None
-        self.takeoff_height_m = TAKEOFF_HEIGHT_M
+        self.takeoff_height_m = self.flight_session.height_override_m or TAKEOFF_HEIGHT_M
+        self.scenario_height_provided = False
         self.started_sim = self.spool_started_sim = self.settled_sim = self.hover_completed_sim = self.hover_completed_us = None
         self.last_step = -1
         self.last_input = NavigationInput()
@@ -116,11 +125,20 @@ class Mission:
             self._reset()
             self.identity = identity
             self.phase, self.reason = 'READY', 'ready'
-            self.takeoff_height_m = feedback.get('takeoff_height_m', TAKEOFF_HEIGHT_M)
+            self.takeoff_height_m = (self.flight_session.height_override_m
+                                     or feedback.get('takeoff_height_m', TAKEOFF_HEIGHT_M))
+            self.scenario_height_provided = 'takeoff_height_m' in feedback
         if source['step_index'] < self.last_step:
             return
         # State can change while the frozen source sample remains identical.
         self.feedback = feedback
+        if self.platform.get('backend') != 'betaflight':
+            self.arming_observed_at_s = source['measurement_us'] / 1e6
+        if feedback['state'] == 'stopped' and not feedback['armed']:
+            if self.platform.get('backend') != 'betaflight':
+                self._release_emergency()
+            self.flight_session.mission_started = False
+            self.flight_session.arm_requested = False
         if source['step_index'] == self.last_step:
             return
         self.last_step = source['step_index']
@@ -162,8 +180,94 @@ class Mission:
         if self.feedback is None:
             return
         status = None if snapshot is None else snapshot[2]
-        self.feedback = dict(self.feedback, armed=False if status is None else status.armed)
+        self.msp_arming_valid = status is not None
+        if status is not None:
+            self.feedback = dict(self.feedback, armed=status.armed)
+            self.arming_observed_at_s = getattr(status, 'received_at', float('-inf'))
+            self.msp_arming_valid = self.arming_observed_at_s != float('-inf')
+            if self.msp_arming_valid and not status.armed and self.feedback['state'] == 'stopped':
+                self._release_emergency()
         self.arming_disabled_flags = None if status is None else status.arming_disabled_flags
+
+    def _release_emergency(self):
+        if self.flight_session.emergency_identity is not None:
+            self.flight_session.emergency_identity = None
+            self.phase, self.reason = 'READY', 'operator_disarmed'
+            self.running_seen = False
+
+    @property
+    def takeoff_height_source(self):
+        return ('operator' if self.flight_session.height_override_m is not None else
+                'scenario' if self.scenario_height_provided else 'default')
+
+    @property
+    def flight_active(self):
+        return self.phase in ('TAKEOFF_SPOOL', 'TAKEOFF', 'HOVER', 'WAIT_TARGET',
+            'YAW_SEARCH', 'YAW_CENTER', 'YAW_SETTLE', 'LOS_ACQUIRE', 'LOS_APPROACH', 'LOS_COMMIT')
+
+    def flight_feedback_valid(self, now_s):
+        if self.platform is None or self.feedback is None:
+            return False
+        source = self.feedback['source']
+        owned = (self.feedback['owner_id'] == self.app_id or
+                 (self.feedback['state'] == 'stopped' and self.feedback['owner_id'] is None))
+        return (owned
+                and 0 <= now_s - source['measurement_us'] / 1e6 <= FEEDBACK_TIMEOUT_S
+                and (self.platform.get('backend') != 'betaflight' or
+                     (self.msp_arming_valid and 0 <= now_s - self.arming_observed_at_s <= MSP_STATUS_TIMEOUT_S)))
+
+    def prearm_ready(self, now_s):
+        return (self.flight_feedback_valid(now_s) and self.feedback['state'] == 'running'
+                and self.hold.ready(now_s) and self.phase not in ('FAULT', 'COMPLETED')
+                and self.flight_session.emergency_identity is None
+                and (self.platform.get('backend') != 'betaflight' or self.arming_disabled_flags == 0))
+
+    def _begin_takeoff(self):
+        self.flight_session.mission_started = True
+        self.phase = 'TAKEOFF_SPOOL' if self.platform.get('backend') == 'betaflight' else 'TAKEOFF'
+        self.reason = 'awaiting_positive_climb' if self.phase == 'TAKEOFF_SPOOL' else 'climbing'
+        self.spool_started_sim = self.feedback['source']['simulation_time_s'] if self.phase == 'TAKEOFF_SPOOL' else None
+        self.started_sim = self.feedback['source']['simulation_time_s']
+        if self.datum is not None:
+            self.goal = self.datum + self.takeoff_height_m
+        logger.info('Takeoff height={} m source={}', self.takeoff_height_m,
+                    self.takeoff_height_source)
+
+    def manual_command(self, action, value, now_s):
+        session = self.flight_session
+        known = self.platform is not None and self.feedback is not None
+        if action in ('disarm', 'emergency'):
+            if not known:
+                raise ValueError('No flight session')
+            if action == 'disarm' and (self.flight_active or session.mission_started):
+                raise ValueError('Airborne disarm requires emergency confirmation')
+            session.operator_control, session.arm_requested, session.mission_started = True, False, False
+            if action == 'emergency':
+                session.emergency_identity = self.identity
+                self.phase, self.reason = 'FAULT', 'operator_emergency_disarm'
+            else:
+                self.phase, self.reason = 'MANUAL_IDLE', 'operator_disarmed'
+            return
+        if not self.flight_feedback_valid(now_s) or self.feedback['state'] != 'running':
+            raise ValueError('Fresh owned flight session required')
+        if self.flight_active or session.mission_started:
+            raise ValueError('Mission already started; height locked')
+        if action == 'height':
+            session.height_override_m = self.takeoff_height_m = value
+            logger.info('Applied takeoff height={} m source=operator', value)
+            if self.datum is not None:
+                self.goal = self.datum + value
+        elif action == 'arm':
+            if not self.prearm_ready(now_s):
+                raise ValueError('Prearm checks are not ready; stop/reset after fault')
+            session.operator_control, session.arm_requested = True, True
+            self.phase, self.reason = 'ARMING', 'operator_arm'
+            self.arm_sequence = self.sequence + 1
+        elif action == 'start':
+            if (not self.prearm_ready(now_s) or not self.feedback['armed']
+                    or self.phase != 'ARMED_IDLE'):
+                raise ValueError('Start requires confirmed armed idle')
+            self._begin_takeoff()
 
     def complete(self, result):
         validate_end(result)
@@ -203,6 +307,14 @@ class Mission:
             if self.phase != 'FAULT':
                 active = True
                 sim = source['simulation_time_s']
+                manual = self.flight_session.operator_control or self.flight_session.arming_mode == 'manual'
+                if manual and not self.flight_session.mission_started:
+                    confirmed = (self.feedback['armed'] and self.feedback['mode'] == 'angle'
+                                 and self.arm_sequence is not None
+                                 and self.feedback['last_applied_sequence'] >= self.arm_sequence)
+                    self.phase = ('ARMED_IDLE' if confirmed else 'ARMING') if self.flight_session.arm_requested else 'MANUAL_IDLE'
+                    self.reason = 'waiting_mission_start' if self.phase == 'ARMED_IDLE' else 'waiting_operator'
+                    armed = self.flight_session.arm_requested
                 if self.phase == 'SENSOR_WARMUP' and self.hold.ready(now_s):
                     self.phase = 'ARMING'
                     self.reason = ('waiting_betaflight_prearm' if self.platform.get('backend') == 'betaflight'
@@ -216,9 +328,10 @@ class Mission:
                         if self.arm_sequence is None:
                             self.arm_sequence = self.sequence + 1
                         if f['armed'] and f['mode'] == 'angle' and f['last_applied_sequence'] >= self.arm_sequence:
-                            self.phase = 'TAKEOFF_SPOOL' if self.platform.get('backend') == 'betaflight' else 'TAKEOFF'
-                            self.reason = 'awaiting_positive_climb' if self.phase == 'TAKEOFF_SPOOL' else 'climbing'
-                            self.spool_started_sim = sim if self.phase == 'TAKEOFF_SPOOL' else None
+                            if manual:
+                                self.phase, self.reason = 'ARMED_IDLE', 'waiting_mission_start'
+                            else:
+                                self._begin_takeoff()
                     else:
                         armed = False
                         self.arm_sequence = None
@@ -275,9 +388,12 @@ class Mission:
             encoded = replace(encoded, throttle=calibrate_betaflight_hover(encoded.throttle, self.config))
             if spool_command and active:
                 encoded = replace(encoded, throttle=max(encoded.throttle, self.config.tuning.betaflight_takeoff_pwm))
+        if not self.flight_active:
+            encoded = replace(encoded, roll=RC_CENTRE, pitch=RC_CENTRE, yaw=RC_CENTRE, throttle=RC_MIN)
         channels = [*encoded.as_tuple(), 2000 if armed else 1000, 2000, *([1000] * 12)]
         self.sequence += 1
-        return dict(schema_version=1, physics_id=source['physics_id'], episode_id=source['episode_id'], app_id=self.app_id,
+        return dict(schema_version=2, mission_started=self.flight_session.mission_started,
+                    physics_id=source['physics_id'], episode_id=source['episode_id'], app_id=self.app_id,
                     sequence=self.sequence, issued_us=now_us, valid_until_us=now_us + lifetime_us, active=active, channels=channels)
 
     def _settling_motion(self):
@@ -468,6 +584,8 @@ class Mission:
                                         if self.phase == 'WAIT_TARGET' else 0.),
                     navigator_state=None if self.nav_result is None else self.nav_result.state.value,
                     diagnostics={**self.diagnostics, 'takeoff_goal_altitude_m': self.goal,
+                                 'takeoff_height_m': self.takeoff_height_m,
+                                 'takeoff_height_source': self.takeoff_height_source,
                                  'barometer_datum_m': self.datum, 'physics_state': self.feedback['state'],
                                  'physics_reason': self.feedback['reason'],
                                  'acquisition_timeout_s': self.config.tuning.acquisition_timeout_s})
