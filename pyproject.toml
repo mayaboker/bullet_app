@@ -5,23 +5,19 @@ build-backend = "hatchling.build"
 [project]
 name = "bullet-app"
 version = "0.1.0"
-description = "Main Bullet application: live camera to red-target bounding boxes"
+description = "Standalone automatic SITL takeoff, hover and landing mission"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["msp-link", "bullet-msgs", "los-tracking", "bullet-perception", "click>=8.5,<9", "loguru>=0.7,<1", "numpy>=2,<3", "opencv-python>=4.10,<5", "pyzmq>=27,<28", "jsonschema>=4,<5", "pymavlink>=2.4,<3"]
+dependencies = ["beta-client", "click>=8.5,<9", "loguru>=0.7,<1", "pymavlink>=2.4.50,<3"]
 
 [project.scripts]
 bullet-app = "bullet_app.main:main"
 
 [dependency-groups]
-dev = ["pytest>=9,<10", "mcap-bagger"]
+dev = ["pytest>=9,<10"]
 
 [tool.uv.sources]
-msp-link = { workspace = true }
-bullet-msgs = { workspace = true }
-los-tracking = { workspace = true }
-bullet-perception = { workspace = true }
-mcap-bagger = { workspace = true }
+beta-client = { path = "../beta_client", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,56 +1,33 @@
-"""Click parsing for the Bullet application command line."""
+"""Command-line options for the standalone simulated flight mission."""
 from dataclasses import dataclass
-from pathlib import Path
 
 import click
 
-
-DEFAULT_BBOX_ENDPOINT = "tcp://127.0.0.1:5558"
-DEFAULT_VISUAL_ENDPOINT = "tcp://127.0.0.1:5560"
-DEFAULT_IMAGE_TOPIC = "camera/front/image"
-DEFAULT_MAVLINK_ENDPOINT = "udpout:127.0.0.1:14550"
-DEFAULT_MAVLINK_CONTROL_ENDPOINT = "udpin:0.0.0.0:14551"
+DEFAULT_MSP_HOST = '127.0.0.1'
+DEFAULT_MSP_PORT = 5761
+DEFAULT_MAVLINK_ENDPOINT = 'tcp:127.0.0.1:5762'
+DEFAULT_MODE = 'auto'
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class AppOptions:
-    transport_config: Path
-    topic: str
-    debug: bool
-    bbox_endpoint: str
-    mission_config: Path | None
-    hover_check: bool
-    visual_endpoint: str = DEFAULT_VISUAL_ENDPOINT
-    mavlink_endpoint: str | None = DEFAULT_MAVLINK_ENDPOINT
-    mavlink_control_endpoint: str | None = DEFAULT_MAVLINK_CONTROL_ENDPOINT
-
-
-@click.command()
-@click.option("--transport-config", type=click.Path(path_type=Path), required=True)
-@click.option("--topic", default=DEFAULT_IMAGE_TOPIC, show_default=True)
-@click.option("--debug", is_flag=True, help="Enable detector diagnostics; view frames in Bullet View")
-@click.option("--bbox-endpoint", default=DEFAULT_BBOX_ENDPOINT, show_default=True,
-              help="Loopback TCP endpoint to bind for bbox results")
-@click.option("--visual-endpoint", default=DEFAULT_VISUAL_ENDPOINT, show_default=True,
-              help="ZMQ endpoint where bullet_visual publishes bbox detections")
-@click.option("--mission-config", type=click.Path(path_type=Path),
-              help="Enable app-owned takeoff/hover/LOS using this navigator profile")
-@click.option("--hover-check", is_flag=True, help="Stop after a stable 20-second hover")
-@click.option("--mavlink-endpoint", default=DEFAULT_MAVLINK_ENDPOINT, show_default=True,
-              help="Pymavlink output for mission telemetry")
-@click.option("--mavlink-control-endpoint", default=DEFAULT_MAVLINK_CONTROL_ENDPOINT, show_default=True,
-              help="Pymavlink input for stop-only mission profile reload commands")
-def command(transport_config, topic, debug, bbox_endpoint, visual_endpoint, mission_config, hover_check, mavlink_endpoint,
-            mavlink_control_endpoint):
-    """Receive Bullet camera images through bullet_visual and publish recorder/mission telemetry."""
-    if hover_check and mission_config is None:
-        raise click.UsageError("--hover-check requires --mission-config")
-    return AppOptions(transport_config, topic, debug, bbox_endpoint, mission_config, hover_check, visual_endpoint,
-                      mavlink_endpoint, mavlink_control_endpoint)
+    msp_host: str = DEFAULT_MSP_HOST
+    msp_port: int = DEFAULT_MSP_PORT
+    mavlink_endpoint: str = DEFAULT_MAVLINK_ENDPOINT
+    mode: str = DEFAULT_MODE
 
 
 class CliParser:
-    """Parse command-line arguments without starting application services."""
+    """Parse options without opening simulation connections."""
 
     def parse(self, argv=None) -> AppOptions | int:
-        return command.main(args=argv, standalone_mode=False)
+        @click.command()
+        @click.option('--msp-host', default=DEFAULT_MSP_HOST, show_default=True)
+        @click.option('--msp-port', type=click.IntRange(1, 65535), default=DEFAULT_MSP_PORT, show_default=True)
+        @click.option('--mavlink-endpoint', default=DEFAULT_MAVLINK_ENDPOINT, show_default=True)
+        @click.option('--mode', type=click.Choice(('auto', 'manual')), default=DEFAULT_MODE, show_default=True)
+        def command(msp_host, msp_port, mavlink_endpoint, mode):
+            """Wait for Bullet View to arm and start a SITL flight."""
+            return AppOptions(msp_host, msp_port, mavlink_endpoint, mode)
+
+        return command.main(args=argv, prog_name='bullet-app', standalone_mode=False)

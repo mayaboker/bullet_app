@@ -25,3 +25,8 @@
 | [0020 LOS roll alignment](0020-los-roll-alignment.md) | Preserve yaw-first centering and verify roll correction during LOS tracking. | Implemented; tests passed | `d58580a` |
 | [0021 TTC stability gating](0021-ttc-stability-gating.md) | Gate noisy TTC estimates before descent-feasibility control. | Implemented; tests passed | `504fc99`, `4241615`, `744968a` |
 | [0022-recorded-issue-triggers](0022-recorded-issue-triggers.md) | Explain tracking triggers from recorded measurements and limits. | Pending | Pending |
+| [0024 Standalone auto mission](0024-standalone-auto-mission.md) | Run a separate MSP/MAVLink app for 10 m takeoff, 10 s hover, landing and disarm. | Implemented; verified in SITL | Pending (no commit requested) |
+| [0025 VS Code auto mission task](0025-vscode-auto-mission-task.md) | Run the standalone app from VS Code after starting the launcher. | Implemented; task verified | Pending (no commit requested) |
+| [0026 View-gated Auto and Manual flight](0026-view-gated-flight.md) | Wait for View Arm/Start; support manual height, Land and repeated flights. | Implemented; verified in SITL | Pending (no commit requested) |
+| [0027 Manual VS Code app task](0027-manual-vscode-task.md) | Start Bullet App in Manual mode from the single VS Code task. | Implemented; task verified | Pending (no commit requested) |
+| [0028 Single-port Bullet View link](0028-single-port-view-link.md) | Send telemetry, receive View commands, and return ACKs through one UDP socket. | Implemented and verified | Pending (no commit requested) |

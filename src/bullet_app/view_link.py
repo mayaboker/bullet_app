@@ -1,0 +1,149 @@
+"""Loopback MAVLink bridge between Bullet App and Bullet View."""
+from math import isfinite
+from time import monotonic
+
+from pymavlink import mavutil
+from pymavlink.dialects.v20 import common
+
+from .flight import PHASE_IDS, FlightMission, Phase
+
+APP_SYSTEM_ID = 1
+APP_COMPONENT_ID = 1
+VIEW_SYSTEM_ID = 255
+VIEW_COMPONENT_ID = 190
+VIEW_ENDPOINT = 'udpout:127.0.0.1:14550'
+VIEW_TIMEOUT_S = 3.0
+HEARTBEAT_PERIOD_S = 1.0
+STATE_PERIOD_S = 0.1
+TELEMETRY_PERIOD_S = 0.05
+ARM_COMMAND = 400
+START_COMMAND = 300
+HEIGHT_COMMAND = 31012
+LAND_COMMAND = 21
+FORCE_DISARM_MAGIC = 21196
+ACTION_IDS = {'arm': 1, 'disarm': 2, 'emergency': 3, 'start': 4,
+              'height': 5, 'invalid': 0, 'land': 6}
+
+
+def _mavlink2(connection) -> None:
+    connection.source_system = APP_SYSTEM_ID
+    connection.source_component = APP_COMPONENT_ID
+    connection.mav = common.MAVLink(connection, srcSystem=APP_SYSTEM_ID, srcComponent=APP_COMPONENT_ID)
+    connection.mav.robust_parsing = connection.robust_parsing
+    connection.WIRE_PROTOCOL_VERSION = '2.0'
+    connection.first_byte = False
+
+
+def _command(message):
+    values = [getattr(message, f'param{index}') for index in range(1, 8)]
+    if not all(isfinite(value) for value in values):
+        raise ValueError('Nonfinite flight parameter')
+    first, second, *rest = values
+    if any(value != 0 for value in rest):
+        raise ValueError('Unsupported flight parameter')
+    if message.command == ARM_COMMAND:
+        if first == 1 and second == 0:
+            return 'arm', None
+        if first == 0 and second == 0:
+            return 'disarm', None
+        if first == 0 and second == FORCE_DISARM_MAGIC:
+            return 'emergency', None
+    elif message.command == START_COMMAND and first == second == 0:
+        return 'start', None
+    elif message.command == HEIGHT_COMMAND and second == 0:
+        return 'height', first
+    elif message.command == LAND_COMMAND and first == second == 0:
+        return 'land', None
+    raise ValueError('Unsupported flight command')
+
+
+class ViewLink:
+    def __init__(self, endpoint=VIEW_ENDPOINT, connection_factory=mavutil.mavlink_connection):
+        self.endpoint = endpoint
+        self.connection_factory = connection_factory
+        self.connection = None
+        self.last_view_at: float | None = None
+        self.last_heartbeat_at = self.last_state_at = self.last_telemetry_at = 0.0
+        self.last_phase: Phase | None = None
+        self.datum_m: float | None = None
+
+    def __enter__(self):
+        try:
+            self.connection = self.connection_factory(self.endpoint,
+                                                      source_system=APP_SYSTEM_ID, source_component=APP_COMPONENT_ID)
+            _mavlink2(self.connection)
+            return self
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
+
+    def __exit__(self, *_):
+        if self.connection is not None:
+            self.connection.close()
+
+    def view_alive(self, now: float) -> bool:
+        return self.last_view_at is not None and 0 <= now - self.last_view_at <= VIEW_TIMEOUT_S
+
+    def poll(self, mission: FlightMission, now: float, altitude_m: float | None) -> None:
+        for _ in range(32):
+            message = self.connection.recv_match(type=['HEARTBEAT', 'COMMAND_LONG'], blocking=False)
+            if message is None:
+                break
+            if (message.get_srcSystem(), message.get_srcComponent()) != (VIEW_SYSTEM_ID, VIEW_COMPONENT_ID):
+                continue
+            if message.get_type() == 'HEARTBEAT':
+                self.last_view_at = now
+                continue
+            if (message.target_system, message.target_component) != (APP_SYSTEM_ID, APP_COMPONENT_ID):
+                continue
+            action = 'invalid'
+            try:
+                action, height_m = _command(message)
+                if not self.view_alive(now):
+                    raise ValueError('Bullet View heartbeat is stale')
+                mission.request(action, now, altitude_m, height_m)
+            except ValueError:
+                result = mavutil.mavlink.MAV_RESULT_DENIED
+            else:
+                result = mavutil.mavlink.MAV_RESULT_ACCEPTED
+            self.connection.mav.command_ack_send(message.command, result, 0, ACTION_IDS[action],
+                                                 VIEW_SYSTEM_ID, VIEW_COMPONENT_ID)
+
+    def publish(self, mission: FlightMission, sample, now: float, firmware_armed: bool) -> None:
+        elapsed_ms = int(now * 1000) % 2**32
+        elapsed_us = int(now * 1_000_000) % 2**64
+        mav = self.connection.mav
+        if now - self.last_heartbeat_at >= HEARTBEAT_PERIOD_S:
+            mode = mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED if firmware_armed else 0
+            status = (mavutil.mavlink.MAV_STATE_ACTIVE if mission.readiness == 3
+                      else mavutil.mavlink.MAV_STATE_STANDBY)
+            mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_QUADROTOR,
+                               mavutil.mavlink.MAV_AUTOPILOT_GENERIC, mode, 0, status, 3)
+            self.last_heartbeat_at = now
+        if now - self.last_state_at >= STATE_PERIOD_S:
+            values = (('ARM_MODE', float(firmware_armed)),
+                      ('ARM_VALID', float(sample.heartbeat is not None and now - sample.heartbeat_at <= 3.0)),
+                      ('MIS_READY', float(mission.readiness)), ('TAKEOFF_H', mission.height_m),
+                      ('APP_MODE', float(mission.mode == 'manual')),
+                      ('APP_PHASE', float(PHASE_IDS[mission.phase])))
+            for name, value in values:
+                mav.named_value_float_send(elapsed_ms, name.encode('ascii'), value)
+            self.last_state_at = now
+        if mission.phase != self.last_phase:
+            self.last_phase = mission.phase
+            description = mission.fault_reason if mission.phase == Phase.FAULT else mission.phase.value
+            severity = 3 if mission.phase == Phase.FAULT else 6
+            mav.statustext_send(severity, description.encode('utf-8')[:50])
+        if now - self.last_telemetry_at >= TELEMETRY_PERIOD_S:
+            attitude = sample.attitude
+            if attitude is not None and now - sample.attitude_at <= 1.0:
+                mav.attitude_send(elapsed_ms, attitude.roll, attitude.pitch, attitude.yaw,
+                                  attitude.rollspeed, attitude.pitchspeed, attitude.yawspeed)
+            altitude = sample.vfr_hud
+            if altitude is not None and now - sample.vfr_hud_at <= 1.0 and isfinite(altitude.alt):
+                if self.datum_m is None:
+                    self.datum_m = altitude.alt
+                datum = mission.ground_altitude_m if mission.ground_altitude_m is not None else self.datum_m
+                mav.altitude_send(elapsed_us, float('nan'), float('nan'), altitude.alt - datum,
+                                  float('nan'), float('nan'), float('nan'))
+            self.last_telemetry_at = now
