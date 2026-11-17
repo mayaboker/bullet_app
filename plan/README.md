@@ -30,4 +30,4 @@
 | [0026 View-gated Auto and Manual flight](0026-view-gated-flight.md) | Wait for View Arm/Start; support manual height, Land and repeated flights. | Implemented; verified in SITL | Pending (no commit requested) |
 | [0027 Manual VS Code app task](0027-manual-vscode-task.md) | Start Bullet App in Manual mode from the single VS Code task. | Implemented; task verified | Pending (no commit requested) |
 | [0028 Single-port Bullet View link](0028-single-port-view-link.md) | Send telemetry, receive View commands, and return ACKs through one UDP socket. | Implemented and verified | Pending (no commit requested) |
-| [0029 Replace GitHub main](0029-replace-github-main.md) | Refresh the lockfile and publish this checkout while backing up the unrelated GitHub history. | Pending | Pending |
+| [0029 Replace GitHub main](0029-replace-github-main.md) | Refresh the lockfile and publish this checkout while backing up the unrelated GitHub history. | Published and verified | `c0dcd83ccdeeb4fb48dceecd07f6fa291f6a6263` |
