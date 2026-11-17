@@ -4,6 +4,7 @@ from time import monotonic
 
 from pymavlink import mavutil
 from pymavlink.dialects.v20 import common
+from loguru import logger
 
 from .flight import PHASE_IDS, FlightMission, Phase
 
@@ -65,6 +66,7 @@ class ViewLink:
         self.last_view_at: float | None = None
         self.last_heartbeat_at = self.last_state_at = self.last_telemetry_at = 0.0
         self.last_phase: Phase | None = None
+        self.last_result = None
         self.datum_m: float | None = None
 
     def __enter__(self):
@@ -102,8 +104,10 @@ class ViewLink:
                 if not self.view_alive(now):
                     raise ValueError('Bullet View heartbeat is stale')
                 mission.request(action, now, altitude_m, height_m)
-            except ValueError:
+            except ValueError as error:
                 result = mavutil.mavlink.MAV_RESULT_DENIED
+                logger.warning('View command {} denied: {}', action, error)
+                self.connection.mav.statustext_send(4, f'{action} denied: {error}'.encode('utf-8')[:50])
             else:
                 result = mavutil.mavlink.MAV_RESULT_ACCEPTED
             self.connection.mav.command_ack_send(message.command, result, 0, ACTION_IDS[action],
@@ -125,7 +129,10 @@ class ViewLink:
                       ('ARM_VALID', float(sample.heartbeat is not None and now - sample.heartbeat_at <= 3.0)),
                       ('MIS_READY', float(mission.readiness)), ('TAKEOFF_H', mission.height_m),
                       ('APP_MODE', float(mission.mode == 'manual')),
-                      ('APP_PHASE', float(PHASE_IDS[mission.phase])))
+                      ('APP_PHASE', float(PHASE_IDS[mission.phase])),
+                      ('APP_MSN', float({'manual': 0, 'hover-land': 1, 'target-hit': 2}[mission.mission_kind])),
+                      ('APP_RESULT', 0.0 if mission.result is None else 1.0 if mission.result == 'hit' else 2.0),
+                      ('VIS_READY', float(mission.vision_alive(now) if mission.mission_kind == 'target-hit' else True)))
             for name, value in values:
                 mav.named_value_float_send(elapsed_ms, name.encode('ascii'), value)
             self.last_state_at = now
@@ -134,6 +141,10 @@ class ViewLink:
             description = mission.fault_reason if mission.phase == Phase.FAULT else mission.phase.value
             severity = 3 if mission.phase == Phase.FAULT else 6
             mav.statustext_send(severity, description.encode('utf-8')[:50])
+        if mission.result is not None and mission.result != self.last_result:
+            self.last_result = mission.result
+            mav.statustext_send(6 if mission.result == 'hit' else 4,
+                                ('Target result: ' + mission.result).encode('utf-8')[:50])
         if now - self.last_telemetry_at >= TELEMETRY_PERIOD_S:
             attitude = sample.attitude
             if attitude is not None and now - sample.attitude_at <= 1.0:

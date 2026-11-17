@@ -8,6 +8,7 @@ from bullet_app.cli import AppOptions, CliParser
 from bullet_app.flight import Command, FlightMission, Phase
 from bullet_app.mission import _send_command
 from bullet_app.view_link import ViewLink, _command
+from bullet_app.target import TargetMission
 
 
 def ready(mode='auto', ground=42.0):
@@ -166,3 +167,32 @@ def test_view_link_uses_one_udp_socket_for_stream_command_and_ack():
             assert mission.phase == Phase.ARMING
     finally:
         view.close()
+
+
+def test_mavlink_status_names_fit_wire_limit_and_denied_start_reports_reason():
+    mission = FlightMission('auto')
+    sent = []
+    link = ViewLink()
+    link.connection = SimpleNamespace(mav=SimpleNamespace(
+        named_value_float_send=lambda _, name, value: sent.append((name, value))))
+    link.last_heartbeat_at = link.last_telemetry_at = 1.
+    link.last_phase = mission.phase
+    sample = SimpleNamespace(heartbeat=None, heartbeat_at=0, attitude=None, vfr_hud=None)
+    link.publish(mission, sample, 1., False)
+    assert all(len(name) <= 10 for name, _ in sent)
+    assert (b'APP_MSN', 1.) in sent and (b'VIS_READY', 1.) in sent
+
+    target = TargetMission(CliParser().parse(['--mission', 'target-hit']).mission_config)
+    target.phase = Phase.ARMED
+    command = SimpleNamespace(get_type=lambda: 'COMMAND_LONG', get_srcSystem=lambda: 255,
+        get_srcComponent=lambda: 190, target_system=1, target_component=1, command=300,
+        **{f'param{i}': 0. for i in range(1, 8)})
+    messages = iter((command, None))
+    acks, statuses = [], []
+    link.connection = SimpleNamespace(recv_match=lambda **_: next(messages), mav=SimpleNamespace(
+        command_ack_send=lambda *args: acks.append(args),
+        statustext_send=lambda *args: statuses.append(args)))
+    link.last_view_at = 1.
+    link.poll(target, 1.1, 10.)
+    assert acks[0][1] == mavutil.mavlink.MAV_RESULT_DENIED
+    assert b'Live target detector required' in statuses[0][1]

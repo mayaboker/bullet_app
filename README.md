@@ -46,4 +46,33 @@ Disarm in View immediately stops motors and requires an app restart.
 `--msp-host`, `--msp-port`, and `--mavlink-endpoint` select nondefault SITL
 connections. This controller and its throttle tuning are for SITL only.
 
+## Red-truck target mission
+
+Run **Bullet: Run target scene (SITL + renderer + visual)** from the
+`bullet_drone` workspace folder, then **Bullet: Run app (choose mission)**,
+select **Search for and hit the red truck**, and run
+**Bullet: Run view**. The equivalent App command is:
+
+```sh
+uv run --locked bullet-app --mode auto --mission target-hit
+```
+
+View still sends **Arm**, then **Start target mission**. Start is denied until
+`bullet_visual` has produced a fresh camera result. The drone climbs 10 m,
+hovers 10 seconds, sweeps in yaw to find and center the red truck, and then
+uses `los_tracking` to command roll, pitch, yaw rate and throttle. LOS uses
+Betaflight MAVLink `ATTITUDE` and `VFR_HUD` plus the detector's timestamped
+bboxes. App does not subscribe to simulation pose or flight feedback. The only
+direct simulation input to App is the confirmed red-truck contact event.
+`ATTITUDE.time_boot_ms` is mapped onto the host monotonic clock; `VFR_HUD`
+has no source timestamp, so its local MAVLink receive time is used.
+
+Contact disarms and reports **hit**. A full search circle or 60-second search
+limit, lost target after LOS recovery, 120-second approach limit, or 3-second
+post-commit contact limit triggers landing with a failure reason. This first
+version permits one target attempt per App process; restart App and launcher
+for another attempt. Existing auto hover/land and manual missions remain
+available. The target profile defaults to the sibling `los_tracking` Bullet
+profile and can be changed with `--mission-config`.
+
 Run focused tests with `uv run --locked pytest -q`.

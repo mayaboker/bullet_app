@@ -11,6 +11,8 @@ from pymavlink import mavutil
 
 from .flight import Command, FlightMission, Phase
 from .view_link import ViewLink
+from .ingress import TargetIngress
+from .target import TargetMission
 
 CONTROL_CENTER = 1500
 AUX_LOW = 1000
@@ -26,7 +28,7 @@ LOG_PERIOD_S = 1.0
 
 
 def _send_command(transport: TcpTransport, command: Command) -> None:
-    channels = RcChannels((CONTROL_CENTER, CONTROL_CENTER, command.throttle, CONTROL_CENTER,
+    channels = RcChannels((command.roll, command.pitch, command.throttle, command.yaw,
                            AUX_HIGH if command.arm else AUX_LOW, AUX_HIGH, AUX_LOW, AUX_LOW))
     send_rc(transport, channels)
     transport.drain_responses()
@@ -34,13 +36,15 @@ def _send_command(transport: TcpTransport, command: Command) -> None:
 
 def run_mission(options) -> int:
     """Keep App available for repeated flights; never own SITL or renderer."""
-    mission = FlightMission(options.mode)
+    mission = TargetMission(options.mission_config) if options.mission == 'target-hit' else FlightMission(options.mode)
     with ExitStack() as resources:
         telemetry = resources.enter_context(MavlinkTelemetry(options.mavlink_endpoint))
         telemetry.set_message_rate(mavutil.mavlink.MAVLINK_MSG_ID_VFR_HUD, TELEMETRY_RATE_HZ)
         telemetry.set_message_rate(mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, TELEMETRY_RATE_HZ)
         transport = resources.enter_context(TcpTransport(options.msp_host, options.msp_port))
         view = resources.enter_context(ViewLink())
+        ingress = (resources.enter_context(TargetIngress(options.bbox_endpoint, options.contact_endpoint))
+                   if options.mission == 'target-hit' else None)
         try:
             connected_at = time.monotonic()
             next_tick = connected_at
@@ -50,6 +54,12 @@ def run_mission(options) -> int:
                 sample = telemetry.snapshot()
                 now = time.monotonic()
                 altitude = sample.vfr_hud.alt if sample.vfr_hud is not None else None
+                if ingress is not None:
+                    bbox, contact = ingress.poll()
+                    if bbox is not None:
+                        mission.observe_bbox(bbox, now)
+                    mission.observe_contact(contact)
+                    mission.sample = sample
                 view.poll(mission, now, altitude)
                 firmware_armed = bool(sample.heartbeat is not None and
                                       sample.heartbeat.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)

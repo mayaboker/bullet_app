@@ -31,3 +31,5 @@
 | [0027 Manual VS Code app task](0027-manual-vscode-task.md) | Start Bullet App in Manual mode from the single VS Code task. | Implemented; task verified | Pending (no commit requested) |
 | [0028 Single-port Bullet View link](0028-single-port-view-link.md) | Send telemetry, receive View commands, and return ACKs through one UDP socket. | Implemented and verified | Pending (no commit requested) |
 | [0029 Replace GitHub main](0029-replace-github-main.md) | Refresh the lockfile and publish this checkout while backing up the unrelated GitHub history. | Published and verified | `c0dcd83ccdeeb4fb48dceecd07f6fa291f6a6263` |
+| [0030 Selectable target mission](0030-selectable-target-mission.md) | Add startup-selected red-truck search and MAVLink/bbox LOS guidance. | Pending; focused tests passed, live SITL check blocked by occupied port | Pending |
+| [0031 VS Code mission choice](0031-vscode-mission-choice.md) | Choose hover-land or target-hit when running the automatic App task. | Pending; task and CLI values verified | Pending |

@@ -35,6 +35,11 @@ class Phase(str, Enum):
     LAND = 'land'
     DISARMING = 'disarming'
     FAULT = 'fault'
+    SEARCH = 'search'
+    CENTER = 'center'
+    SETTLE = 'settle'
+    LOS = 'los'
+    COMMIT = 'commit'
 
 
 PHASE_IDS = {phase: index for index, phase in enumerate(Phase)}
@@ -44,14 +49,17 @@ PHASE_IDS = {phase: index for index, phase in enumerate(Phase)}
 class Command:
     throttle: int
     arm: bool
+    roll: int = 1500
+    pitch: int = 1500
+    yaw: int = 1500
 
 
 class FlightMission:
     """Apply View commands, then advance against fresh Betaflight observations."""
 
     def __init__(self, mode: str):
-        if mode not in ('auto', 'manual'):
-            raise ValueError('mode must be auto or manual')
+        if mode not in ('auto', 'manual', 'target'):
+            raise ValueError('mode must be auto, manual or target')
         self.mode = mode
         self.phase = Phase.PREARM
         self.entered_at: float | None = None
@@ -62,6 +70,8 @@ class FlightMission:
         self.near_hover_at: float | None = None
         self.controller = AltitudeControl()
         self.fault_reason: str | None = None
+        self.mission_kind = 'manual' if mode == 'manual' else 'hover-land'
+        self.result: str | None = None
 
     def _enter(self, phase: Phase, now: float) -> None:
         if phase == self.phase:
@@ -83,7 +93,7 @@ class FlightMission:
             return 1
         if self.phase == Phase.ARMED:
             return 2
-        if self.phase in (Phase.TAKEOFF, Phase.HOVER, Phase.LAND):
+        if self.phase in (Phase.TAKEOFF, Phase.HOVER, Phase.LAND, Phase.SEARCH, Phase.CENTER, Phase.SETTLE, Phase.LOS, Phase.COMMIT):
             return 3
         if self.phase == Phase.FAULT:
             return 4
@@ -138,7 +148,7 @@ class FlightMission:
         if not view_alive:
             if self.phase in (Phase.ARMING, Phase.ARMED):
                 self._enter(Phase.DISARMING, now)
-            elif self.phase in (Phase.TAKEOFF, Phase.HOVER):
+            elif self.phase in (Phase.TAKEOFF, Phase.HOVER, Phase.SEARCH, Phase.CENTER, Phase.SETTLE, Phase.LOS, Phase.COMMIT):
                 self._enter(Phase.LAND, now)
         if self.phase == Phase.PREARM:
             if firmware_armed:
