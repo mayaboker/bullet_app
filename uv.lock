@@ -13,7 +13,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "bullet-drone", marker = "extra == 'flight'", editable = "../../workspaces/bullet/bullet_drone" },
+    { name = "bullet-drone", marker = "extra == 'flight'", editable = "../bullet_drone" },
     { name = "pymavlink", specifier = ">=2.4.50" },
     { name = "pyserial", specifier = ">=3.5" },
 ]
