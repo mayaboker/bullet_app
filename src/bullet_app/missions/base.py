@@ -102,6 +102,9 @@ class MissionBase:
         self.fault_reason = reason
         self._enter(Phase.FAULT, now)
 
+    def request_height(self, height_m: float) -> None:
+        raise ValueError('Height is fixed by the mission profile')
+
     def request(self, action: str, now: float, altitude_m: float | None = None,
                 height_m: float | None = None, *, automatic: bool = False) -> None:
         if self.phase == Phase.FAULT:

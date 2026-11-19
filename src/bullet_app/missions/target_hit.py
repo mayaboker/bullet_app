@@ -9,10 +9,10 @@ from los_tracking.types import AttitudeSample, BarometerSample, State, TargetObs
 
 from ..altitude_control import HOVER_THROTTLE
 from ..sensor_estimator import TargetSensorEstimator
-from .base import Command, MissionBase, Phase
+from .base import Command, MAX_HEIGHT_M, MIN_HEIGHT_M, MissionBase, Phase
 
 TARGET_HEIGHT_M = 10.0
-TARGET_HOVER_S = 10.0
+TARGET_HOVER_S = 5.0
 SEARCH_RATE_RAD_S = radians(15)
 SEARCH_TIMEOUT_S = 60.0
 SEARCH_CIRCLE_RAD = 2 * pi
@@ -87,8 +87,19 @@ class TargetMission(MissionBase):
         self.timesync_started_at = None
         self.timesync_observed_at = 0.0
         self.last_attitude_boot_ms = None
+        self.last_attitude_mapped_age_s = None
+        self.attitude_mapping_rejections = 0
         self.last_navigation_input = None
         self.last_navigation_result = None
+
+    def request_height(self, height_m: float) -> None:
+        if self.mode != 'manual':
+            raise ValueError('Target height requires manual mode')
+        if self.phase not in (Phase.DISARMED, Phase.ARMED) or self.started or self.attempted:
+            raise ValueError('Target height requires idle flight before Start')
+        if type(height_m) not in (int, float) or not isfinite(height_m) or not MIN_HEIGHT_M <= height_m <= MAX_HEIGHT_M:
+            raise ValueError('Target height must be 0.1–100 m')
+        self.height_m = float(height_m)
 
     def observe_bbox(self, packet, now):
         fields = {'schema_version', 'image_topic', 'session', 'sequence', 'capture_ns',
@@ -194,10 +205,13 @@ class TargetMission(MissionBase):
             if self.sync_ready(now) and (self.last_attitude_boot_ms is None or a.time_boot_ms > self.last_attitude_boot_ms):
                 self.last_attitude_boot_ms = a.time_boot_ms
                 measured_at = (self.timesync_status.offset_ns + a.time_boot_ms * 1_000_000) / 1e9
-                if 0 <= now - measured_at <= self.config.tuning.max_attitude_age_s:
+                self.last_attitude_mapped_age_s = now - measured_at
+                if 0 <= self.last_attitude_mapped_age_s <= self.config.tuning.max_attitude_age_s:
                     self.sensor_estimator.push_attitude(AttitudeSample(
                         SITL_STREAM_ID, a.time_boot_ms, measured_at,
                         _quaternion(a.roll, a.pitch, a.yaw)))
+                else:
+                    self.attitude_mapping_rejections += 1
         if sample.vfr_hud is not None and 0 <= now - sample.vfr_hud_at <= self.config.tuning.max_barometer_age_s:
             self.sensor_estimator.push_barometer(BarometerSample(
                 SITL_STREAM_ID, round(sample.vfr_hud_at * 1e9),

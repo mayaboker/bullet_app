@@ -39,3 +39,6 @@
 | [0035 Fixed-rate LOS estimator](0035-fixed-rate-los-estimator.md) | Smooth and resample target-hit sensors while preserving camera capture times. | Implemented; tests and live target hit passed | `9cfa2de` |
 | [0036 MAVLink TIMESYNC](0036-mavlink-timesync.md) | Align SITL attitude with the camera clock and gate target flight on fresh sync. | Implemented; tests and live target hit passed | `5e5ba45` (beta_client), `9960df8` (App) |
 | [0037 Colored terminal logs](0037-colored-terminal-logs.md) | Color Bullet App terminal diagnostics while keeping redirected logs readable. | Implemented; output verified | Pending (no commit requested) |
+| [0038 LOS sensor tick staleness](0038-los-sensor-tick-staleness.md) | Keep fresh MAVLink samples available across estimator ticks and diagnose LOS faults. | Implemented; tests and live barometer check passed | Pending (no commit requested) |
+| [0039 Manual target settings](0039-manual-target-settings.md) | Apply target-hit height and hover duration from Bullet View before Start. | Implemented; 32 App tests passed | Pending (no commit requested) |
+| [0040 Height-only target control](0040-height-only-target-control.md) | Restore one target height setting and fix pre-search hover at five seconds. | Implemented; 32 App tests passed | Pending (no commit requested) |

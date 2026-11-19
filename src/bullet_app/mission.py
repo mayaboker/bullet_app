@@ -7,6 +7,7 @@ from beta_client.mavlink import MavlinkTelemetry
 from beta_client.msp import send_rc
 from beta_client.transport import TcpTransport
 from loguru import logger
+from los_tracking.types import State
 from pymavlink import mavutil
 
 from .missions import Command, Phase, create_mission
@@ -76,7 +77,7 @@ def run_mission(options) -> int:
             previous_result = None
             previous_navigation = None
             previous_alignment_counts = (0, 0)
-            previous_estimator_counts = (0, 0, 0)
+            previous_estimator_counts = (0, 0, 0, 0, 0, 0)
             previous_sync_ready = False
             rates = RateMonitor(connected_at)
             while True:
@@ -137,8 +138,29 @@ def run_mission(options) -> int:
                 if navigation is not None:
                     current_navigation = (navigation.state, navigation.reason)
                     if current_navigation != previous_navigation:
-                        logger.info('LOS state={} reason={} vision={}', navigation.state.value,
-                                    navigation.reason, navigation.diagnostics.vision_reason)
+                        if navigation.state == State.FAULT:
+                            estimator = mission.sensor_estimator
+                            tick = estimator.last_tick_s
+                            latest_barometer = estimator.barometer_latest
+                            logger.warning(
+                                'LOS state=fault reason={} vision={} nav_attitude_age={} nav_barometer_age={} '
+                                'source_attitude_age={} source_barometer_age={} tick_lag={} latest_barometer_minus_tick={} '
+                                'mapped_attitude_age={} attitude_mapping_rejections={} '
+                                'barometer_interpolations_total={} barometer_missing_ticks_total={} VFR_HUD={:.1f} Hz',
+                                navigation.reason, navigation.diagnostics.vision_reason,
+                                None if navigation.diagnostics.attitude_age_s is None else round(navigation.diagnostics.attitude_age_s, 3),
+                                None if navigation.diagnostics.barometer_age_s is None else round(navigation.diagnostics.barometer_age_s, 3),
+                                None if estimator.attitude_latest is None else round(now - estimator.attitude_latest.timestamp_s, 3),
+                                None if latest_barometer is None else round(now - latest_barometer.timestamp_s, 3),
+                                None if tick is None else round(now - tick, 3),
+                                None if tick is None or latest_barometer is None else round(latest_barometer.timestamp_s - tick, 3),
+                                None if mission.last_attitude_mapped_age_s is None else round(mission.last_attitude_mapped_age_s, 3),
+                                mission.attitude_mapping_rejections,
+                                estimator.barometer_interpolations, estimator.barometer_missing_ticks,
+                                sample.vfr_hud_hz)
+                        else:
+                            logger.info('LOS state={} reason={} vision={}', navigation.state.value,
+                                        navigation.reason, navigation.diagnostics.vision_reason)
                         previous_navigation = current_navigation
                 if options.mode == 'auto':
                     outcome = _automatic_result(mission, firmware_armed)
@@ -178,18 +200,26 @@ def run_mission(options) -> int:
                         previous_alignment_counts = counts
                         estimator = mission.sensor_estimator
                         estimator_counts = (estimator.skipped_ticks, estimator.expired_boxes,
-                                            estimator.overflow_boxes)
+                                            estimator.overflow_boxes, estimator.attitude_interpolations,
+                                            estimator.barometer_interpolations, estimator.barometer_missing_ticks)
                         logger.info('LOS estimator attitude_source_age={} altitude_source_age={} '
+                                    'mapped_attitude_age={} attitude_mapping_rejections={} '
                                     'attitude_prediction_age={} altitude_prediction_age={} '
-                                    'queue_depth={} skipped_ticks={} expired_boxes={} overflow_boxes={}',
+                                    'queue_depth={} skipped_ticks_last_s={} expired_boxes_last_s={} overflow_boxes_last_s={} '
+                                    'attitude_interpolations_last_s={} barometer_interpolations_last_s={} barometer_missing_ticks_last_s={}',
                                     None if estimator.attitude_latest is None else round(now - estimator.attitude_latest.timestamp_s, 3),
                                     None if estimator.barometer_latest is None else round(now - estimator.barometer_latest.timestamp_s, 3),
+                                    None if mission.last_attitude_mapped_age_s is None else round(mission.last_attitude_mapped_age_s, 3),
+                                    mission.attitude_mapping_rejections,
                                     None if estimator.last_attitude_prediction_age_s is None else round(estimator.last_attitude_prediction_age_s, 3),
                                     None if estimator.last_altitude_prediction_age_s is None else round(estimator.last_altitude_prediction_age_s, 3),
                                     estimator.queue_depth,
                                     estimator_counts[0] - previous_estimator_counts[0],
                                     estimator_counts[1] - previous_estimator_counts[1],
-                                    estimator_counts[2] - previous_estimator_counts[2])
+                                    estimator_counts[2] - previous_estimator_counts[2],
+                                    estimator_counts[3] - previous_estimator_counts[3],
+                                    estimator_counts[4] - previous_estimator_counts[4],
+                                    estimator_counts[5] - previous_estimator_counts[5])
                         previous_estimator_counts = estimator_counts
                     last_log = now
                 next_tick += CONTROL_PERIOD_S

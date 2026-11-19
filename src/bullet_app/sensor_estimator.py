@@ -34,6 +34,10 @@ class TargetSensorEstimator:
         self.expired_boxes = 0
         self.overflow_boxes = 0
         self.reordered_samples = 0
+        self.attitude_interpolations = 0
+        self.barometer_interpolations = 0
+        self.barometer_missing_ticks = 0
+        self.last_tick_s = None
         self.last_attitude_prediction_age_s = None
         self.last_altitude_prediction_age_s = None
 
@@ -44,6 +48,7 @@ class TargetSensorEstimator:
     def start_los(self):
         self.next_tick_s = None
         self.first_attitude_tick_s = None
+        self.last_tick_s = None
 
     def push_attitude(self, sample: AttitudeSample):
         previous = self.attitude_latest
@@ -93,12 +98,23 @@ class TargetSensorEstimator:
         latest = self.attitude_latest
         if latest is None:
             return None
+        previous = self.attitude_previous
+        if latest.timestamp_s > tick_s + TIME_EPSILON_S:
+            if previous is None or self.smoothed_previous is None:
+                return None
+            age = tick_s - previous.timestamp_s
+            if not -TIME_EPSILON_S <= age <= MAX_PREDICTION_S + TIME_EPSILON_S:
+                return None
+            fraction = age / (latest.timestamp_s - previous.timestamp_s)
+            self.last_attitude_prediction_age_s = max(0.0, age)
+            self.attitude_interpolations += 1
+            orientation = slerp(self.smoothed_previous, self.smoothed_latest, fraction)
+            return AttitudeSample(ESTIMATED_STREAM_ID, self.sequence, tick_s, orientation)
         lead = tick_s - latest.timestamp_s
         if not -TIME_EPSILON_S <= lead <= MAX_PREDICTION_S + TIME_EPSILON_S:
             return None
         self.last_attitude_prediction_age_s = max(0.0, lead)
         orientation = self.smoothed_latest
-        previous = self.attitude_previous
         if previous is not None and self.smoothed_previous is not None and lead > 0:
             interval = latest.timestamp_s - previous.timestamp_s
             dot = abs(sum(a * b for a, b in zip(self.smoothed_previous, orientation)))
@@ -112,12 +128,23 @@ class TargetSensorEstimator:
         latest = self.barometer_latest
         if latest is None:
             return None
+        previous = self.barometer_previous
+        if latest.timestamp_s > tick_s + TIME_EPSILON_S:
+            if previous is None:
+                return None
+            age = tick_s - previous.timestamp_s
+            if not -TIME_EPSILON_S <= age <= MAX_PREDICTION_S + TIME_EPSILON_S:
+                return None
+            fraction = age / (latest.timestamp_s - previous.timestamp_s)
+            self.last_altitude_prediction_age_s = max(0.0, age)
+            self.barometer_interpolations += 1
+            altitude = previous.altitude_m + fraction * (latest.altitude_m - previous.altitude_m)
+            return BarometerSample(ESTIMATED_STREAM_ID, self.sequence, tick_s, altitude)
         lead = tick_s - latest.timestamp_s
         if not -TIME_EPSILON_S <= lead <= MAX_PREDICTION_S + TIME_EPSILON_S:
             return None
         self.last_altitude_prediction_age_s = max(0.0, lead)
         altitude = latest.altitude_m
-        previous = self.barometer_previous
         if previous is not None and lead > 0:
             interval = latest.timestamp_s - previous.timestamp_s
             velocity = (latest.altitude_m - previous.altitude_m) / interval
@@ -135,11 +162,14 @@ class TargetSensorEstimator:
         self.skipped_ticks += missed
         tick_s = self.next_tick_s + missed * ESTIMATE_PERIOD_S
         self.next_tick_s = tick_s + ESTIMATE_PERIOD_S
+        self.last_tick_s = tick_s
         self.sequence += 1
         self.last_attitude_prediction_age_s = None
         self.last_altitude_prediction_age_s = None
         attitude = self._attitude_at(tick_s)
         barometer = self._barometer_at(tick_s)
+        if barometer is None:
+            self.barometer_missing_ticks += 1
         if attitude is not None and self.first_attitude_tick_s is None:
             self.first_attitude_tick_s = tick_s
         while self.targets and (now_s - self.targets[0].timestamp_s > self.tuning.max_image_age_s

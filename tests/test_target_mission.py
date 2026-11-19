@@ -51,6 +51,7 @@ def test_target_enters_search_after_hover_without_bbox():
             break
     assert mission.phase == Phase.SEARCH
     assert mission.bbox is None
+    assert 105. <= now < 106.
 
 
 def test_target_search_failure_lands_and_contact_disarms():

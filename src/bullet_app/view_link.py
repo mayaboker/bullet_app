@@ -115,10 +115,13 @@ class ViewLink:
                 continue
             action = 'invalid'
             try:
-                action, height_m = _command(message)
+                action, value = _command(message)
                 if not self.view_alive(now):
                     raise ValueError('Bullet View heartbeat is stale')
-                mission.request(action, now, altitude_m, height_m)
+                if action == 'height':
+                    mission.request_height(value)
+                else:
+                    mission.request(action, now, altitude_m, value)
             except ValueError as error:
                 result = mavutil.mavlink.MAV_RESULT_DENIED
                 logger.warning('View command {} denied: {}', action, error)
@@ -149,6 +152,7 @@ class ViewLink:
             values = (('ARM_MODE', float(firmware_armed)),
                       ('ARM_VALID', float(sample.heartbeat is not None and now - sample.heartbeat_at <= 3.0)),
                       ('MIS_READY', float(mission.readiness)), ('TAKEOFF_H', mission.height_m),
+                      ('HOVER_S', mission.hover_duration_s),
                       ('APP_MODE', float(mission.mode == 'manual')),
                       ('APP_PHASE', float(PHASE_IDS[mission.phase])),
                       ('APP_MSN', float({'hover-land': 1, 'target-hit': 2}[mission.mission_kind])),

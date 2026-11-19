@@ -107,6 +107,58 @@ def test_command_mapping_and_cli():
     assert CliParser().parse(['--mode', 'manual']).mode == 'manual'
     message = SimpleNamespace(command=21, **{f'param{i}': 0.0 for i in range(1, 8)})
     assert _command(message) == ('land', None)
+    message.command = 31012
+    message.param1 = 12.5
+    assert _command(message) == ('height', 12.5)
+    message.param2 = 3.5
+    with pytest.raises(ValueError, match='Unsupported'):
+        _command(message)
+
+
+def test_target_height_locks_on_start_and_hover_duration_is_fixed():
+    mission = TargetMission(DEFAULT_TARGET_PROFILE)
+    mission.phase = Phase.DISARMED
+    mission.request_height(12.5)
+    assert (mission.height_m, mission.hover_duration_s) == (12.5, 5.)
+    with pytest.raises(ValueError, match='height'):
+        mission.request_height(0.)
+    assert mission.height_m == 12.5
+    mission.phase = Phase.ARMED
+    mission.request_height(15.)
+    assert (mission.height_m, mission.hover_duration_s) == (15., 5.)
+    mission.phase = Phase.TAKEOFF
+    with pytest.raises(ValueError, match='idle'):
+        mission.request_height(10.)
+    with pytest.raises(ValueError, match='profile'):
+        FlightMission('manual').request_height(10.)
+    automatic = TargetMission(DEFAULT_TARGET_PROFILE, mode='auto')
+    automatic.phase = Phase.DISARMED
+    with pytest.raises(ValueError, match='manual'):
+        automatic.request_height(10.)
+
+
+def test_view_link_applies_target_height_and_acks_denial():
+    mission = TargetMission(DEFAULT_TARGET_PROFILE)
+    mission.phase = Phase.DISARMED
+    acks = []
+    messages = []
+    for height, hover in ((12.5, 0.), (14., 3.5)):
+        messages.append(SimpleNamespace(
+            command=31012, target_system=1, target_component=1,
+            **{f'param{i}': value for i, value in enumerate((height, hover, 0., 0., 0., 0., 0.), 1)},
+            get_type=lambda: 'COMMAND_LONG', get_srcSystem=lambda: 255,
+            get_srcComponent=lambda: 190))
+    messages.append(None)
+    iterator = iter(messages)
+    link = ViewLink()
+    link.last_view_at = 1.
+    link.connection = SimpleNamespace(recv_match=lambda **kwargs: next(iterator),
+        mav=SimpleNamespace(command_ack_send=lambda *args: acks.append(args),
+                            statustext_send=lambda *args: None))
+    link.poll(mission, 1.1, 0.)
+    assert (mission.height_m, mission.hover_duration_s) == (12.5, 5.)
+    assert [ack[:2] for ack in acks] == [(31012, mavutil.mavlink.MAV_RESULT_ACCEPTED),
+                                         (31012, mavutil.mavlink.MAV_RESULT_DENIED)]
 
 
 def test_view_link_rejects_wrong_source_and_acks_commands():
@@ -183,6 +235,7 @@ def test_mavlink_status_names_fit_wire_limit_and_denied_start_reports_reason():
     link.publish(mission, sample, 1., False)
     assert all(len(name) <= 10 for name, _ in sent)
     assert (b'APP_MSN', 1.) in sent and (b'VIS_READY', 1.) in sent
+    assert (b'HOVER_S', mission.hover_duration_s) in sent
     assert (b'ATT_HZ', 49.) in sent and (b'ALT_HZ', 48.) in sent
 
     alerts = []
