@@ -18,7 +18,7 @@ From terminals:
 
 ```sh
 cd /home/user/projects/bullet_drone
-uv run --frozen --extra sitl --extra mavlink --extra render python -m examples.simulation_launcher.main
+uv run --frozen --extra sitl --extra mavlink --extra render launcher
 
 cd /home/user/projects/bullet_app
 uv sync --group dev
