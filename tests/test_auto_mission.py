@@ -9,7 +9,7 @@ from bullet_app.flight import Command, FlightMission, Phase
 from bullet_app.mission import _advance_automatic_start, _automatic_result, _send_command
 from bullet_app.missions import create_mission
 from bullet_app.missions.hover_land import HoverLandSettings
-from bullet_app.view_link import ViewLink, _command
+from bullet_app.view_link import SITL_CONFIRMED_CUSTOM_MODE, ViewLink, _command
 from bullet_app.target import TargetMission
 
 
@@ -209,6 +209,13 @@ def test_view_link_uses_one_udp_socket_for_stream_command_and_ack():
             link.publish(mission, sample, 112.1, False)
             heartbeat = view.recv_match(type='HEARTBEAT', blocking=True, timeout=1)
             assert heartbeat is not None and heartbeat.get_srcSystem() == 1
+            assert heartbeat.custom_mode == 0
+            link.sitl_confirmed = True
+            link.publish(mission, sample, 113.2, True)
+            confirmed = view.recv_match(type='HEARTBEAT', blocking=True, timeout=1)
+            assert confirmed.custom_mode == SITL_CONFIRMED_CUSTOM_MODE
+            assert confirmed.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED
+            assert confirmed.system_status == mavutil.mavlink.MAV_STATE_STANDBY
             view.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_GCS,
                                     mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0,
                                     mavutil.mavlink.MAV_STATE_ACTIVE, 3)

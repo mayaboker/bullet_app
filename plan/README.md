@@ -43,3 +43,4 @@
 | [0039 Manual target settings](0039-manual-target-settings.md) | Interim two-value target settings design. | Superseded by 0040 | `cd22cd8` |
 | [0040 Height-only target control](0040-height-only-target-control.md) | Restore one target height setting and fix pre-search hover at five seconds. | Implemented; 32 App tests passed | `cd22cd8` |
 | [0041 Persistent tracking logs](0041-persistent-tracking-logs.md) | Save each App run and 5 Hz target guidance checkpoints in workspace logs. | Implemented; 36 App tests and CLI smoke passed | `3b40552` (App), `e81c4db` (workspace) |
+| [0042 SITL identification in App heartbeat](0042-sitl-heartbeat.md) | Query MSP board identity at startup and carry SITL confirmation in App heartbeat. | Implemented; tests and live SITL heartbeat passed | Pending |

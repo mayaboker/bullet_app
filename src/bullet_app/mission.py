@@ -4,7 +4,7 @@ import time
 
 from beta_client.entities import RcChannels
 from beta_client.mavlink import MavlinkTelemetry
-from beta_client.msp import send_rc
+from beta_client.msp import read_board_identifier, send_rc
 from beta_client.transport import TcpTransport
 from loguru import logger
 from los_tracking.types import State
@@ -68,7 +68,17 @@ def run_mission(options) -> int:
         if options.mission == 'target-hit':
             telemetry.enable_timesync()
         transport = resources.enter_context(TcpTransport(options.msp_host, options.msp_port))
+        try:
+            board_identifier = read_board_identifier(transport)
+        except (OSError, ValueError, TimeoutError) as error:
+            logger.warning('Betaflight SITL not confirmed: {}', error)
+            sitl_confirmed = False
+        else:
+            sitl_confirmed = board_identifier == 'SITL'
+            logger.info('Betaflight board identifier: {} (SITL {})', board_identifier,
+                        'confirmed' if sitl_confirmed else 'not confirmed')
         view = resources.enter_context(ViewLink())
+        view.sitl_confirmed = sitl_confirmed
         ingress = (resources.enter_context(TargetIngress(options.bbox_endpoint, options.contact_endpoint))
                    if options.mission == 'target-hit' else None)
         try:

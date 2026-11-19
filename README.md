@@ -7,6 +7,12 @@ uses `beta_client` to read Betaflight MAVLink on TCP 5762 and send MSP RC on TCP
 heartbeat and flight commands on the same connection, and App replies with
 command ACKs. The app does not import the simulator or renderer.
 
+At startup, App requests `MSP_BOARD_INFO` on the MSP connection. It confirms
+Betaflight SITL when the board identifier is `SITL`, and reports the result in
+bit 0 of its App-to-View MAVLink `HEARTBEAT.custom_mode`. A clear bit means SITL
+was not confirmed, including when the request fails; App logs the reason and
+continues. This identifies the firmware target, not the physics connection.
+
 ## Run
 
 In the multi-root VS Code workspace, run **Bullet: Run launcher (SITL +

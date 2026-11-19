@@ -16,6 +16,7 @@ VIEW_COMPONENT_ID = 190
 VIEW_ENDPOINT = 'udpout:127.0.0.1:14550'
 VIEW_TIMEOUT_S = 3.0
 HEARTBEAT_PERIOD_S = 1.0
+SITL_CONFIRMED_CUSTOM_MODE = 1 << 0
 STATE_PERIOD_S = 0.1
 TELEMETRY_PERIOD_S = 0.05
 RATE_PERIOD_S = 1.0
@@ -71,6 +72,7 @@ class ViewLink:
         self.last_phase: Phase | None = None
         self.last_result = None
         self.datum_m: float | None = None
+        self.sitl_confirmed = False
 
     def __enter__(self):
         try:
@@ -146,7 +148,8 @@ class ViewLink:
             status = (mavutil.mavlink.MAV_STATE_ACTIVE if mission.readiness == 3
                       else mavutil.mavlink.MAV_STATE_STANDBY)
             mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_QUADROTOR,
-                               mavutil.mavlink.MAV_AUTOPILOT_GENERIC, mode, 0, status, 3)
+                               mavutil.mavlink.MAV_AUTOPILOT_GENERIC, mode,
+                               SITL_CONFIRMED_CUSTOM_MODE if self.sitl_confirmed else 0, status, 3)
             self.last_heartbeat_at = now
         if now - self.last_state_at >= STATE_PERIOD_S:
             values = (('ARM_MODE', float(firmware_armed)),
