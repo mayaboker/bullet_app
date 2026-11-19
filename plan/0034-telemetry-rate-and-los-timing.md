@@ -10,4 +10,4 @@ Verification: focused rate-warning, wire, and alignment tests; target-stack diag
 
 Scope/defaults: warning below 40 Hz for two one-second windows; recovery at or above 45 Hz for two windows; startup windows ignored. This pass measures alignment and does not change its buffering policy.
 
-Status: Implemented; 17 App tests and 52 focused LOS tests passed. A live target mission reported 46–48 Hz upstream rates and 17 waiting-box replacements in one second before `LOS recovery_timeout`. Implementation commit: Pending (no commit requested).
+Status: Implemented; 17 App tests and 52 focused LOS tests passed. A live target mission reported 46–48 Hz upstream rates and 17 waiting-box replacements in one second before `LOS recovery_timeout`. Implementation commits: `9cfa2de` (App), `069f3b8` (LOS).

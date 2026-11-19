@@ -10,4 +10,4 @@ Verification: deterministic 47 Hz MAVLink/30 Hz camera/50 Hz control tests with 
 
 Scope/defaults: target-hit only; new boxes are never repeated as new detections. Missed control ticks are counted, not replayed as commands. No commit requested.
 
-Status: Implemented; 25 App tests passed and the live target mission reached commit and a confirmed hit with zero alignment replacements. Implementation commit: Pending (no commit requested).
+Status: Implemented; 25 App tests passed and the live target mission reached commit and a confirmed hit with zero alignment replacements. Implementation commit: `9cfa2de`.
