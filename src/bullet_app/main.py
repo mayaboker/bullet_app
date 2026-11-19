@@ -10,7 +10,12 @@ from .mission import run_mission
 
 def main(argv=None) -> int:
     logger.remove()
-    logger.add(sys.stderr, level='INFO', format='{message}')
+    logger.add(
+        sys.stderr,
+        level='INFO',
+        format='<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>',
+        colorize=None,
+    )
     try:
         options = CliParser().parse(argv)
         return options if isinstance(options, int) else run_mission(options)
