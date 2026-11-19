@@ -18,6 +18,7 @@ VIEW_TIMEOUT_S = 3.0
 HEARTBEAT_PERIOD_S = 1.0
 STATE_PERIOD_S = 0.1
 TELEMETRY_PERIOD_S = 0.05
+RATE_PERIOD_S = 1.0
 ARM_COMMAND = 400
 START_COMMAND = 300
 HEIGHT_COMMAND = 31012
@@ -66,6 +67,7 @@ class ViewLink:
         self.connection = None
         self.last_view_at: float | None = None
         self.last_heartbeat_at = self.last_state_at = self.last_telemetry_at = 0.0
+        self.last_rate_at = 0.0
         self.last_phase: Phase | None = None
         self.last_result = None
         self.datum_m: float | None = None
@@ -93,6 +95,11 @@ class ViewLink:
         payload = encode_bbox(packet['fid'], packet['bbox']).ljust(MAX_PAYLOAD_BYTES, b'\0')
         self.connection.mav.v2_extension_send(0, VIEW_SYSTEM_ID, VIEW_COMPONENT_ID,
                                                MESSAGE_TYPE, payload)
+
+    def publish_rate_alert(self, name: str, event: str, hz: float) -> None:
+        description = f'{name} rate {"low" if event == "low" else "recovered"}: {hz:.1f} Hz'
+        severity = 4 if event == 'low' else 6
+        self.connection.mav.statustext_send(severity, description.encode('ascii')[:50])
 
     def poll(self, mission: MissionBase, now: float, altitude_m: float | None) -> None:
         for _ in range(32):
@@ -125,6 +132,12 @@ class ViewLink:
         elapsed_ms = int(now * 1000) % 2**32
         elapsed_us = int(now * 1_000_000) % 2**64
         mav = self.connection.mav
+        if now - self.last_rate_at >= RATE_PERIOD_S:
+            for name, value in (('ATT_HZ', getattr(sample, 'attitude_hz', None)),
+                                ('ALT_HZ', getattr(sample, 'vfr_hud_hz', None))):
+                if value is not None and isfinite(value):
+                    mav.named_value_float_send(elapsed_ms, name.encode('ascii'), value)
+            self.last_rate_at = now
         if now - self.last_heartbeat_at >= HEARTBEAT_PERIOD_S:
             mode = mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED if firmware_armed else 0
             status = (mavutil.mavlink.MAV_STATE_ACTIVE if mission.readiness == 3

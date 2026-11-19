@@ -89,3 +89,29 @@ def test_los_uses_mavlink_samples_and_bbox_to_command_forward_pitch():
         command = mission.step(now, 10., now - .005, True, True)
     assert mission.phase == Phase.LOS
     assert command.arm and command.pitch > 1500
+
+
+def test_attitude_clock_mapping_tracks_sitl_drift():
+    mission = TargetMission(DEFAULT_TARGET_PROFILE)
+    for index in range(1501):
+        now = 100. + index * .02
+        sample = _sample(now - .01)
+        sample.attitude.time_boot_ms = round(index * 19.6)
+        mission.sample = sample
+        mission._observe_telemetry(now)
+    assert mission.sensor_estimator.attitude_latest is not None
+    assert now - mission.sensor_estimator.attitude_latest.timestamp_s < .06
+    assert mission.boot_offset_s - 100. > .5
+
+
+def test_los_lands_when_raw_attitude_source_becomes_stale():
+    mission = TargetMission(DEFAULT_TARGET_PROFILE)
+    mission.phase = Phase.LOS
+    mission.ground_altitude_m = 0.
+    mission.height_m = 10.
+    mission.los_started = 100.
+    mission.sample = _sample(100.)
+    mission.step(100., 10., 100., True, True)
+    mission.step(100.21, 10., 100., True, True)
+    assert mission.phase == Phase.LAND
+    assert mission.result == 'LOS attitude source stale'

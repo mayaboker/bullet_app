@@ -178,10 +178,19 @@ def test_mavlink_status_names_fit_wire_limit_and_denied_start_reports_reason():
         named_value_float_send=lambda _, name, value: sent.append((name, value))))
     link.last_heartbeat_at = link.last_telemetry_at = 1.
     link.last_phase = mission.phase
-    sample = SimpleNamespace(heartbeat=None, heartbeat_at=0, attitude=None, vfr_hud=None)
+    sample = SimpleNamespace(heartbeat=None, heartbeat_at=0, attitude=None, vfr_hud=None,
+                             attitude_hz=49., vfr_hud_hz=48.)
     link.publish(mission, sample, 1., False)
     assert all(len(name) <= 10 for name, _ in sent)
     assert (b'APP_MSN', 1.) in sent and (b'VIS_READY', 1.) in sent
+    assert (b'ATT_HZ', 49.) in sent and (b'ALT_HZ', 48.) in sent
+
+    alerts = []
+    link.connection.mav.statustext_send = lambda *args: alerts.append(args)
+    link.publish_rate_alert('ATTITUDE', 'low', 32.)
+    link.publish_rate_alert('ATTITUDE', 'recovered', 48.)
+    assert alerts[0][0] == 4 and b'32.0 Hz' in alerts[0][1]
+    assert alerts[1][0] == 6 and b'recovered' in alerts[1][1]
 
     target = TargetMission(DEFAULT_TARGET_PROFILE)
     target.phase = Phase.DISARMED

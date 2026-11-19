@@ -1,13 +1,13 @@
 """One-attempt MAVLink-and-bbox red-truck mission."""
-from math import cos, degrees, isfinite, pi, radians, sin, sqrt
+from math import cos, degrees, exp, isfinite, pi, radians, sin, sqrt
 import re
 
 from los_tracking import LosNavigator
 from los_tracking.config import NavigatorConfig
-from los_tracking.types import (AttitudeSample, BarometerSample, NavigationInput,
-                                State, TargetObservation)
+from los_tracking.types import AttitudeSample, BarometerSample, State, TargetObservation
 
 from ..altitude_control import HOVER_THROTTLE
+from ..sensor_estimator import TargetSensorEstimator
 from .base import Command, MissionBase, Phase
 
 TARGET_HEIGHT_M = 10.0
@@ -30,6 +30,7 @@ ANGLE_SCALE_RAD = pi / 4
 THROTTLE_MIN = 1050
 THROTTLE_MAX = 2000
 IDLE_FRACTION = 0.055
+CLOCK_OFFSET_SMOOTHING_S = 0.5
 
 
 def _wrap(angle):
@@ -70,6 +71,7 @@ class TargetMission(MissionBase):
         super().__init__(mode, 'target-hit', TARGET_HEIGHT_M, TARGET_HOVER_S)
         self.config = NavigatorConfig.from_yaml(config_path)
         self.navigator = LosNavigator(self.config)
+        self.sensor_estimator = TargetSensorEstimator(self.config.tuning)
         self.bbox = None
         self.contact = False
         self.attempted = False
@@ -81,6 +83,10 @@ class TargetMission(MissionBase):
         self.los_started = None
         self.commit_started = None
         self.boot_offset_s = None
+        self.boot_offset_updated_at = None
+        self.last_attitude_boot_ms = None
+        self.last_navigation_input = None
+        self.last_navigation_result = None
 
     def observe_bbox(self, packet, now):
         fields = {'schema_version', 'image_topic', 'session', 'sequence', 'capture_ns',
@@ -106,6 +112,10 @@ class TargetMission(MissionBase):
                 if any(type(v) is not int for v in (x, y, w, h)) or min(x, y) < 0 or min(w, h) <= 0 or x + w > packet['width'] or y + h > packet['height']:
                     return False
             self.bbox = packet
+            if self.phase == Phase.LOS:
+                self.sensor_estimator.push_target(TargetObservation(
+                    packet['session'], packet['sequence'], stamp,
+                    None if box is None else (box['x'], box['y'], box['width'], box['height'])))
             return True
         except (KeyError, TypeError, OverflowError, ZeroDivisionError):
             return False
@@ -143,27 +153,34 @@ class TargetMission(MissionBase):
             self.swept += max(0.0, _wrap(yaw - self.last_yaw))
         self.last_yaw = yaw
 
-    def _sensor_inputs(self, now):
+    def _observe_telemetry(self, now):
         sample = self.sample
-        attitude = barometer = target = None
+        if sample is None:
+            return
         if sample.attitude is not None and 0 <= now - sample.attitude_at <= self.config.tuning.max_attitude_age_s:
             a = sample.attitude
-            candidate_offset = sample.attitude_at - a.time_boot_ms / 1000
-            if self.boot_offset_s is None or candidate_offset < self.boot_offset_s:
-                self.boot_offset_s = candidate_offset
-            measured_at = self.boot_offset_s + a.time_boot_ms / 1000
-            if 0 <= now - measured_at <= self.config.tuning.max_attitude_age_s:
-                attitude = AttitudeSample(SITL_STREAM_ID, a.time_boot_ms, measured_at,
-                                          _quaternion(a.roll, a.pitch, a.yaw))
+            if self.last_attitude_boot_ms is None or a.time_boot_ms > self.last_attitude_boot_ms:
+                candidate_offset = sample.attitude_at - a.time_boot_ms / 1000
+                if self.boot_offset_s is None:
+                    self.boot_offset_s = candidate_offset
+                else:
+                    dt = sample.attitude_at - self.boot_offset_updated_at
+                    alpha = 1 - exp(-dt / CLOCK_OFFSET_SMOOTHING_S)
+                    self.boot_offset_s += alpha * (candidate_offset - self.boot_offset_s)
+                self.boot_offset_updated_at = sample.attitude_at
+                self.last_attitude_boot_ms = a.time_boot_ms
+                measured_at = min(sample.attitude_at, self.boot_offset_s + a.time_boot_ms / 1000)
+                if 0 <= now - measured_at <= self.config.tuning.max_attitude_age_s:
+                    self.sensor_estimator.push_attitude(AttitudeSample(
+                        SITL_STREAM_ID, a.time_boot_ms, measured_at,
+                        _quaternion(a.roll, a.pitch, a.yaw)))
         if sample.vfr_hud is not None and 0 <= now - sample.vfr_hud_at <= self.config.tuning.max_barometer_age_s:
-            barometer = BarometerSample(SITL_STREAM_ID, round(sample.vfr_hud_at * 1e9),
-                                        sample.vfr_hud_at, sample.vfr_hud.alt)
-        if self.bbox is not None and 0 <= now - self.bbox['capture_ns'] / 1e9 <= MAX_BBOX_AGE_S:
-            box = self.bbox['bbox']
-            target = TargetObservation(self.bbox['session'], self.bbox['sequence'],
-                self.bbox['capture_ns'] / 1e9,
-                None if box is None else tuple(box[key] for key in ('x', 'y', 'width', 'height')))
-        return NavigationInput(target, barometer, attitude)
+            self.sensor_estimator.push_barometer(BarometerSample(
+                SITL_STREAM_ID, round(sample.vfr_hud_at * 1e9),
+                sample.vfr_hud_at, sample.vfr_hud.alt))
+
+    def _sensor_inputs(self, now):
+        return self.sensor_estimator.tick(now)
 
     def _target_step(self, now, altitude, altitude_at, firmware_armed, view_alive):
         if not firmware_armed:
@@ -208,6 +225,7 @@ class TargetMission(MissionBase):
                         elif now - self.settled_at >= SETTLE_S:
                             self._enter(Phase.LOS, now)
                             self.los_started = now
+                            self.sensor_estimator.start_los()
                     else:
                         self.settled_at = None
             if self.phase != Phase.LOS:
@@ -215,8 +233,16 @@ class TargetMission(MissionBase):
         if now - self.los_started >= APPROACH_TIMEOUT_S:
             self._fail('approach timed out', now)
             return super().step(now, altitude, altitude_at, firmware_armed, view_alive)
-        result = self.navigator.update(self._sensor_inputs(now), now_s=now, enabled=True,
+        if (self.sample.attitude is None or now - self.sample.attitude_at > self.config.tuning.max_attitude_age_s):
+            self._fail('LOS attitude source stale', now)
+            return super().step(now, altitude, altitude_at, firmware_armed, view_alive)
+        if (self.sample.vfr_hud is None or now - self.sample.vfr_hud_at > self.config.tuning.max_barometer_age_s):
+            self._fail('LOS altitude source stale', now)
+            return super().step(now, altitude, altitude_at, firmware_armed, view_alive)
+        self.last_navigation_input = self._sensor_inputs(now)
+        result = self.navigator.update(self.last_navigation_input, now_s=now, enabled=True,
                                        command_horizon_s=0.02)
+        self.last_navigation_result = result
         if result.state == State.FAULT:
             self._fail(f'LOS {result.reason}', now)
             return super().step(now, altitude, altitude_at, firmware_armed, view_alive)
@@ -232,6 +258,7 @@ class TargetMission(MissionBase):
         return _demand_command(result.command, self.config)
 
     def step(self, now, altitude_m, altitude_at, firmware_armed, view_alive):
+        self._observe_telemetry(now)
         if self.phase in (Phase.SEARCH, Phase.CENTER, Phase.SETTLE, Phase.LOS, Phase.COMMIT):
             return self._target_step(now, altitude_m, altitude_at, firmware_armed, view_alive)
         return super().step(now, altitude_m, altitude_at, firmware_armed, view_alive)

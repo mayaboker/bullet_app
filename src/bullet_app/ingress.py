@@ -26,7 +26,7 @@ class TargetIngress:
 
     @staticmethod
     def _drain(socket, topic):
-        latest = None
+        values = []
         for _ in range(32):
             try:
                 parts = socket.recv_multipart(zmq.NOBLOCK)
@@ -39,18 +39,19 @@ class TargetIngress:
             except (ValueError, UnicodeError):
                 continue
             if isinstance(value, dict):
-                latest = value
-        return latest
+                values.append(value)
+        return values
 
     def poll(self):
-        bbox = self._drain(self.bbox, BBOX_TOPIC)
-        contact = self._drain(self.contact, TARGET_CONTACT_TOPIC)
+        bboxes = self._drain(self.bbox, BBOX_TOPIC)
+        contacts = self._drain(self.contact, TARGET_CONTACT_TOPIC)
+        contact = contacts[-1] if contacts else None
         if contact is not None:
             try:
                 contact = validate_target_contact(contact)
             except (ValueError, TypeError):
                 contact = None
-        return bbox, contact
+        return bboxes, contact
 
     def close(self):
         self.bbox.close(linger=0)
