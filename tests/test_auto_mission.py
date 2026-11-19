@@ -204,8 +204,9 @@ def test_mavlink_status_names_fit_wire_limit_and_denied_start_reports_reason():
         statustext_send=lambda *args: statuses.append(args)))
     link.last_view_at = 1.
     link.poll(target, 1.1, 10.)
-    assert acks[0][1] == mavutil.mavlink.MAV_RESULT_ACCEPTED
-    assert target.phase == Phase.ARMING
+    assert acks[0][1] == mavutil.mavlink.MAV_RESULT_DENIED
+    assert target.phase == Phase.DISARMED
+    assert b'TIMESYNC' in statuses[0][1]
 
 
 def test_hover_profile_and_startup_selection(tmp_path):

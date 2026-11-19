@@ -37,6 +37,8 @@ def _send_command(transport: TcpTransport, command: Command) -> None:
 def _advance_automatic_start(mission, now: float, altitude: float) -> None:
     if mission.started:
         return
+    if mission.mission_kind == 'target-hit' and not mission.sync_ready(now):
+        return
     if mission.phase == Phase.DISARMED:
         mission.request('arm', now, automatic=True)
     elif mission.phase == Phase.ARMED:
@@ -60,6 +62,8 @@ def run_mission(options) -> int:
         telemetry = resources.enter_context(MavlinkTelemetry(options.mavlink_endpoint))
         telemetry.set_message_rate(mavutil.mavlink.MAVLINK_MSG_ID_VFR_HUD, TELEMETRY_RATE_HZ)
         telemetry.set_message_rate(mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, TELEMETRY_RATE_HZ)
+        if options.mission == 'target-hit':
+            telemetry.enable_timesync()
         transport = resources.enter_context(TcpTransport(options.msp_host, options.msp_port))
         view = resources.enter_context(ViewLink())
         ingress = (resources.enter_context(TargetIngress(options.bbox_endpoint, options.contact_endpoint))
@@ -73,12 +77,14 @@ def run_mission(options) -> int:
             previous_navigation = None
             previous_alignment_counts = (0, 0)
             previous_estimator_counts = (0, 0, 0)
+            previous_sync_ready = False
             rates = RateMonitor(connected_at)
             while True:
                 sample = telemetry.snapshot()
                 now = time.monotonic()
                 altitude = sample.vfr_hud.alt if sample.vfr_hud is not None else None
                 if ingress is not None:
+                    mission.observe_timesync(sample.timesync, now)
                     bboxes, contact = ingress.poll()
                     for bbox in bboxes:
                         if mission.observe_bbox(bbox, now):
@@ -122,6 +128,11 @@ def run_mission(options) -> int:
                     else:
                         logger.warning('mission result: {}', mission.result)
                     previous_result = mission.result
+                if ingress is not None:
+                    sync_ready = mission.sync_ready(now)
+                    if sync_ready != previous_sync_ready:
+                        logger.info('MAVLink TIMESYNC {}', 'ready' if sync_ready else 'lost')
+                        previous_sync_ready = sync_ready
                 navigation = getattr(mission, 'last_navigation_result', None)
                 if navigation is not None:
                     current_navigation = (navigation.state, navigation.reason)
@@ -143,13 +154,13 @@ def run_mission(options) -> int:
                                 sample.attitude_hz, sample.vfr_hud_hz,
                                 now - sample.attitude_at if sample.attitude_at else float('nan'),
                                 now - sample.vfr_hud_at if sample.vfr_hud_at else float('nan'))
-                    if (mission.mission_kind == 'target-hit' and sample.attitude is not None
-                            and mission.boot_offset_s is not None):
-                        candidate_offset = sample.attitude_at - sample.attitude.time_boot_ms / 1000
-                        logger.info('ATTITUDE clock source_age={:.3f} s offset_gap={:.3f} s boot_ms={}',
-                                    now - mission.sensor_estimator.attitude_latest.timestamp_s
-                                    if mission.sensor_estimator.attitude_latest is not None else float('nan'),
-                                    candidate_offset - mission.boot_offset_s, sample.attitude.time_boot_ms)
+                    if mission.mission_kind == 'target-hit':
+                        sync = sample.timesync
+                        logger.info('TIMESYNC ready={} samples={} rtt_ms={} age_s={} offset_s={}',
+                                    mission.sync_ready(now), 0 if sync is None else sync.accepted_samples,
+                                    None if sync is None else round(sync.rtt_ns / 1e6, 2),
+                                    None if sync is None else round(now - sync.updated_at, 3),
+                                    None if sync is None else round(sync.offset_ns / 1e9, 6))
                     navigation_input = getattr(mission, 'last_navigation_input', None)
                     if mission.phase in (Phase.LOS, Phase.COMMIT) and navigation is not None and navigation_input is not None:
                         target, attitude = navigation_input.target, navigation_input.attitude

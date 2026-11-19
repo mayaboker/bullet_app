@@ -37,3 +37,4 @@
 | [0033 View bbox extension](0033-view-bbox-extension.md) | Forward validated fid-tagged detections to View through MAVLink. | Implemented; tests and live smoke passed | `ef32619903337bf9baa67b593b3fe29b51509007` |
 | [0034 Telemetry rate and LOS timing](0034-telemetry-rate-and-los-timing.md) | Report upstream rates and image/attitude alignment before changing LOS buffering. | Implemented; tests and live diagnosis passed | `9cfa2de` (App), `069f3b8` (LOS) |
 | [0035 Fixed-rate LOS estimator](0035-fixed-rate-los-estimator.md) | Smooth and resample target-hit sensors while preserving camera capture times. | Implemented; tests and live target hit passed | `9cfa2de` |
+| [0036 MAVLink TIMESYNC](0036-mavlink-timesync.md) | Align SITL attitude with the camera clock and gate target flight on fresh sync. | Implemented; tests and live target hit passed | Pending |

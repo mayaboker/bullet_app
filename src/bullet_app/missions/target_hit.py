@@ -1,6 +1,7 @@
 """One-attempt MAVLink-and-bbox red-truck mission."""
-from math import cos, degrees, exp, isfinite, pi, radians, sin, sqrt
+from math import cos, degrees, isfinite, pi, radians, sin, sqrt
 import re
+from beta_client.timesync import TimeSyncStatus
 
 from los_tracking import LosNavigator
 from los_tracking.config import NavigatorConfig
@@ -30,7 +31,7 @@ ANGLE_SCALE_RAD = pi / 4
 THROTTLE_MIN = 1050
 THROTTLE_MAX = 2000
 IDLE_FRACTION = 0.055
-CLOCK_OFFSET_SMOOTHING_S = 0.5
+TIMESYNC_STARTUP_TIMEOUT_S = 5.0
 
 
 def _wrap(angle):
@@ -82,8 +83,9 @@ class TargetMission(MissionBase):
         self.settled_at = None
         self.los_started = None
         self.commit_started = None
-        self.boot_offset_s = None
-        self.boot_offset_updated_at = None
+        self.timesync_status: TimeSyncStatus | None = None
+        self.timesync_started_at = None
+        self.timesync_observed_at = 0.0
         self.last_attitude_boot_ms = None
         self.last_navigation_input = None
         self.last_navigation_result = None
@@ -126,11 +128,41 @@ class TargetMission(MissionBase):
             self.contact = True
 
     def request(self, action, now, altitude_m=None, height_m=None, *, automatic=False):
+        if action in ('arm', 'start') and not self.sync_ready(now):
+            raise ValueError('MAVLink TIMESYNC not ready')
         if self.attempted and action in ('arm', 'start'):
             raise ValueError('Target mission permits one attempt per process')
         super().request(action, now, altitude_m, height_m, automatic=automatic)
         if action == 'start':
             self.attempted = True
+
+    @property
+    def readiness(self):
+        if self.phase in (Phase.DISARMED, Phase.ARMED) and not self.sync_ready(self.timesync_observed_at):
+            return 0
+        return super().readiness
+
+    def sync_ready(self, now):
+        return self.timesync_status is not None and self.timesync_status.fresh(now)
+
+    def observe_timesync(self, status, now):
+        was_ready = self.sync_ready(self.timesync_observed_at)
+        if self.timesync_started_at is None:
+            self.timesync_started_at = now
+        self.timesync_status = status
+        self.timesync_observed_at = now
+        if was_ready and not self.sync_ready(now):
+            self.last_attitude_boot_ms = None
+        if self.sync_ready(now) or self.phase in (Phase.FAULT, Phase.DISARMING, Phase.LAND):
+            return
+        if self.phase in (Phase.PREARM, Phase.DISARMED):
+            if now - self.timesync_started_at >= TIMESYNC_STARTUP_TIMEOUT_S:
+                self.fault('MAVLink TIMESYNC unavailable', now)
+        elif self.phase in (Phase.ARMING, Phase.ARMED):
+            self.result = 'MAVLink TIMESYNC lost'
+            self._enter(Phase.DISARMING, now)
+        else:
+            self._fail('MAVLink TIMESYNC lost', now)
 
     def vision_alive(self, now):
         return (self.bbox is not None and
@@ -159,17 +191,9 @@ class TargetMission(MissionBase):
             return
         if sample.attitude is not None and 0 <= now - sample.attitude_at <= self.config.tuning.max_attitude_age_s:
             a = sample.attitude
-            if self.last_attitude_boot_ms is None or a.time_boot_ms > self.last_attitude_boot_ms:
-                candidate_offset = sample.attitude_at - a.time_boot_ms / 1000
-                if self.boot_offset_s is None:
-                    self.boot_offset_s = candidate_offset
-                else:
-                    dt = sample.attitude_at - self.boot_offset_updated_at
-                    alpha = 1 - exp(-dt / CLOCK_OFFSET_SMOOTHING_S)
-                    self.boot_offset_s += alpha * (candidate_offset - self.boot_offset_s)
-                self.boot_offset_updated_at = sample.attitude_at
+            if self.sync_ready(now) and (self.last_attitude_boot_ms is None or a.time_boot_ms > self.last_attitude_boot_ms):
                 self.last_attitude_boot_ms = a.time_boot_ms
-                measured_at = min(sample.attitude_at, self.boot_offset_s + a.time_boot_ms / 1000)
+                measured_at = (self.timesync_status.offset_ns + a.time_boot_ms * 1_000_000) / 1e9
                 if 0 <= now - measured_at <= self.config.tuning.max_attitude_age_s:
                     self.sensor_estimator.push_attitude(AttitudeSample(
                         SITL_STREAM_ID, a.time_boot_ms, measured_at,
