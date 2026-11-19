@@ -10,4 +10,4 @@ Verification: command decoding, phase guards, takeoff/hover behavior, and the Ap
 
 Scope/defaults: target-hit manual mode only; valid applied height 0.1–100 m; default height 10 m. Hover-land profile remains unchanged. No commit requested.
 
-Status: Implemented; 32 App tests passed. Implementation commit: Pending (no commit requested).
+Status: Implemented; 32 App tests passed. Implementation commit: `cd22cd8`.

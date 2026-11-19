@@ -10,4 +10,4 @@ Verification: reproduce `barometer_stale` with steady 47 Hz barometer and contro
 
 Scope/defaults: preserve the 60 ms prediction limit and 200 ms LOS freshness limit. The fallback uses only measurements already received by the App. No commit requested.
 
-Status: Implemented. The regression failed before the fix; all 30 App tests pass afterward. Two initial live LOS runs had zero missing barometer ticks and no `barometer_stale`, then landed and disarmed. After the SITL shared-clock patch, the target mission reached commit, reported a hit, and disarmed with zero ATTITUDE mapping rejections; see [the report](../docs/los-barometer-stale-report.md). Implementation commit: Pending (no commit requested).
+Status: Implemented. The regression failed before the fix; all 30 App tests pass afterward. Two initial live LOS runs had zero missing barometer ticks and no `barometer_stale`, then landed and disarmed. After the SITL shared-clock patch, the target mission reached commit, reported a hit, and disarmed with zero ATTITUDE mapping rejections; see [the report](../docs/los-barometer-stale-report.md). Implementation commit: `cd22cd8`.

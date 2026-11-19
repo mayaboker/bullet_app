@@ -10,4 +10,4 @@ Verification: focused mission and View-link command tests, then the App suite.
 
 Scope/defaults: height 0.1–100 m; hover 0.1–600 s; target defaults 10 m and 10 s. Settings lock once flight starts. No commit requested.
 
-Status: Implemented; 32 App tests passed. Implementation commit: Pending (no commit requested).
+Status: Superseded by [height-only target control](0040-height-only-target-control.md). The interim two-value settings design was implemented and tested before the height-only revision. Implementation commit: `cd22cd8`.
