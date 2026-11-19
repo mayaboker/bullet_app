@@ -1,7 +1,7 @@
 # View bbox extension
 
 Status: Implemented; tests and live smoke passed
-Implementation commit: Pending
+Implementation commit: `ef32619903337bf9baa67b593b3fe29b51509007`
 
 Goal: Forward validated target detections to Bullet View over the existing MAVLink link.
 
