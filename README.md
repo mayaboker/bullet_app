@@ -69,6 +69,9 @@ uses `los_tracking` to command roll, pitch, yaw rate and throttle. LOS uses
 Betaflight MAVLink `ATTITUDE` and `VFR_HUD` plus the detector's timestamped
 bboxes. App does not subscribe to simulation pose or flight feedback. The only
 direct simulation input to App is the confirmed red-truck contact event.
+Accepted detector results are also forwarded to View as MAVLink `V2_EXTENSION`
+messages containing the image `fid` and bbox; View uses that fid to overlay a
+matching local renderer image.
 Visual results are used during the search after hover; they are not required
 before Arm or Start. This target mission retains its existing guidance and
 failure behavior pending a separate target-flight plan.

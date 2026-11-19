@@ -83,29 +83,32 @@ class TargetMission(MissionBase):
         self.boot_offset_s = None
 
     def observe_bbox(self, packet, now):
-        if not isinstance(packet, dict) or set(packet) != {'schema_version', 'image_topic', 'session', 'sequence',
-                'capture_ns', 'width', 'height', 'drone_id', 'bbox'} or packet['schema_version'] != 3:
-            return
+        fields = {'schema_version', 'image_topic', 'session', 'sequence', 'capture_ns',
+                  'width', 'height', 'drone_id', 'bbox'}
+        if not isinstance(packet, dict) or set(packet) not in (fields, fields | {'fid'}) or packet['schema_version'] != 3:
+            return False
         try:
             stamp = packet['capture_ns'] / 1e9
             if (type(packet['capture_ns']) is not int or not 0 <= now - stamp <= MAX_BBOX_AGE_S
+                    or ('fid' in packet and (type(packet['fid']) is not int or not 0 <= packet['fid'] <= 2**53 - 1))
                     or packet['width'] != self.config.camera.width_px
                     or packet['height'] != self.config.camera.height_px
                     or packet['image_topic'] != 'camera/front/image' or packet['drone_id'] != 'drone_1'
                     or not isinstance(packet['session'], str)
                     or re.fullmatch('[0-9a-f]{32}', packet['session']) is None
                     or type(packet['sequence']) is not int or packet['sequence'] <= 0):
-                return
+                return False
             box = packet['bbox']
             if box is not None:
                 if not isinstance(box, dict) or set(box) != {'x', 'y', 'width', 'height'}:
-                    return
+                    return False
                 x, y, w, h = (box[key] for key in ('x', 'y', 'width', 'height'))
                 if any(type(v) is not int for v in (x, y, w, h)) or min(x, y) < 0 or min(w, h) <= 0 or x + w > packet['width'] or y + h > packet['height']:
-                    return
+                    return False
             self.bbox = packet
+            return True
         except (KeyError, TypeError, OverflowError, ZeroDivisionError):
-            return
+            return False
 
     def observe_contact(self, event):
         if event is not None and event.get('target_id') == 'red_truck' and event.get('drone_id') == 'drone_1' and self.phase in (

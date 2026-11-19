@@ -5,6 +5,7 @@ from time import monotonic
 from pymavlink import mavutil
 from pymavlink.dialects.v20 import common
 from loguru import logger
+from bullet_simulation_protocol.view_bbox import MAX_PAYLOAD_BYTES, MESSAGE_TYPE, encode_bbox
 
 from .missions import MissionBase, PHASE_IDS, Phase
 
@@ -85,6 +86,13 @@ class ViewLink:
 
     def view_alive(self, now: float) -> bool:
         return self.last_view_at is not None and 0 <= now - self.last_view_at <= VIEW_TIMEOUT_S
+
+    def publish_bbox(self, packet) -> None:
+        if 'fid' not in packet:
+            return
+        payload = encode_bbox(packet['fid'], packet['bbox']).ljust(MAX_PAYLOAD_BYTES, b'\0')
+        self.connection.mav.v2_extension_send(0, VIEW_SYSTEM_ID, VIEW_COMPONENT_ID,
+                                               MESSAGE_TYPE, payload)
 
     def poll(self, mission: MissionBase, now: float, altitude_m: float | None) -> None:
         for _ in range(32):

@@ -75,7 +75,8 @@ def run_mission(options) -> int:
                 if ingress is not None:
                     bbox, contact = ingress.poll()
                     if bbox is not None:
-                        mission.observe_bbox(bbox, now)
+                        if mission.observe_bbox(bbox, now):
+                            view.publish_bbox(bbox)
                     mission.observe_contact(contact)
                     mission.sample = sample
                 view.poll(mission, now, altitude)
