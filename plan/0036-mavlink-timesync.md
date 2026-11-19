@@ -10,4 +10,4 @@ Verification: beta_client worker/filter/timeout tests; App mission gating, times
 
 Scope/defaults: local commits only. TIMESYNC is target-hit opt-in. Request period 0.2 s, maximum accepted RTT 0.04 s, minimum five replies, stale after 1 s, startup wait 5 s.
 
-Status: Implemented. beta_client and App tests passed. A live SITL target mission acquired sync, completed LOS, and reported a confirmed hit; the simulator and Visual process were stopped afterward. Implementation commits: Pending.
+Status: Implemented. beta_client and App tests passed. A live SITL target mission acquired sync, completed LOS, and reported a confirmed hit; the simulator and Visual process were stopped afterward. Implementation commits: `5e5ba45` (beta_client), `9960df8` (App).
