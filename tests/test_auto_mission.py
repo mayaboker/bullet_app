@@ -4,42 +4,44 @@ import pytest
 from pymavlink import mavutil
 from pymavlink.dialects.v20 import common
 
-from bullet_app.cli import AppOptions, CliParser
+from bullet_app.cli import AppOptions, CliParser, DEFAULT_TARGET_PROFILE
 from bullet_app.flight import Command, FlightMission, Phase
-from bullet_app.mission import _send_command
+from bullet_app.mission import _advance_automatic_start, _automatic_result, _send_command
+from bullet_app.missions import create_mission
+from bullet_app.missions.hover_land import HoverLandSettings
 from bullet_app.view_link import ViewLink, _command
 from bullet_app.target import TargetMission
 
 
-def ready(mode='auto', ground=42.0):
+def ready(mode='manual', ground=42.0):
     mission = FlightMission(mode)
     assert mission.step(100, ground, 100, False, True) == Command(1000, False)
     mission.step(112, ground, 112, False, True)
     assert mission.phase == Phase.DISARMED
-    mission.request('arm', 112.1)
+    mission.request('arm', 112.1, automatic=mode == 'auto')
     assert mission.step(112.2, ground, 112.2, False, True).arm
     mission.step(112.3, ground, 112.3, True, True)
     assert mission.phase == Phase.ARMED
-    mission.request('start', 112.4, ground)
+    mission.request('start', 112.4, ground, automatic=mode == 'auto')
     return mission
 
 
-def test_auto_waits_for_view_then_completes_and_can_rearm():
+def test_auto_runs_without_view_and_stops_after_one_flight():
     mission = FlightMission('auto')
     with pytest.raises(ValueError):
         mission.request('arm', 1)
     mission.step(100, 42, 100, False, True)
     mission.step(112, 42, 112, False, True)
     assert mission.phase == Phase.DISARMED
-    mission = ready()
-    mission.step(113, 51.9, 113, True, True)
-    mission.step(113.1, 52, 113.1, True, True)
+    mission = ready('auto')
+    mission.step(113, 61.9, 113, True, False)
+    mission.step(113.1, 62, 113.1, True, False)
     for now in (113.3, 113.5, 113.7):
-        mission.step(now, 52, now, True, True)
+        mission.step(now, 62, now, True, False)
     assert mission.phase == Phase.HOVER
     for index in range(1, 60):
         now = 113.7 + index * .2
-        mission.step(now, 52, now, True, True)
+        mission.step(now, 62, now, True, False)
         if mission.phase == Phase.LAND:
             break
     assert mission.phase == Phase.LAND
@@ -51,31 +53,30 @@ def test_auto_waits_for_view_then_completes_and_can_rearm():
     assert mission.phase == Phase.DISARMING
     mission.step(now + .1, 42.1, now + .1, False, True)
     assert mission.phase == Phase.DISARMED
-    mission.request('arm', 126)
-    assert mission.phase == Phase.ARMING
+    with pytest.raises(ValueError, match='one attempt'):
+        mission.request('arm', 126, automatic=True)
 
 
-def test_manual_height_hold_land_and_link_loss():
+def test_manual_approval_uses_profile_height_and_accepts_land():
     mission = FlightMission('manual')
     mission.step(100, 42, 100, False, True)
     mission.step(112, 42, 112, False, True)
-    mission.request('height', 112.1, height_m=100)
-    assert mission.height_m == 100
-    with pytest.raises(ValueError):
-        mission.request('height', 112.1, height_m=100.1)
+    with pytest.raises(ValueError, match='mission profile'):
+        mission.request('height', 112.1, height_m=100)
+    assert mission.height_m == 20
     mission.request('arm', 112.2)
     mission.step(112.3, 42, 112.3, True, True)
     mission.request('start', 112.4, 42)
-    mission.step(113, 142, 113, True, True)
-    mission.step(113.1, 142, 113.1, True, True)
+    mission.step(113, 62, 113, True, True)
+    mission.step(113.1, 62, 113.1, True, True)
     for now in (113.3, 113.5, 113.7):
-        mission.step(now, 142, now, True, True)
+        mission.step(now, 62, now, True, True)
     assert mission.phase == Phase.HOVER
-    mission.step(200, 142, 200, True, True)
+    mission.step(120, 62, 120, True, True)
     assert mission.phase == Phase.TAKEOFF  # long sample gap invalidates hover speed
-    mission.request('land', 200.1)
+    mission.request('land', 120.1)
     assert mission.phase == Phase.LAND
-    mission.step(200.2, 141, 200.2, True, False)
+    mission.step(120.2, 61, 120.2, True, False)
     assert mission.phase == Phase.LAND
 
 
@@ -127,7 +128,7 @@ def test_view_link_rejects_wrong_source_and_acks_commands():
         def get_srcComponent(self):
             return self.source[1]
 
-    mission = FlightMission('auto')
+    mission = FlightMission('manual')
     mission.step(100, 0, 100, False, True)
     mission.step(112, 0, 112, False, True)
     messages = iter((Message('COMMAND_LONG', (2, 2)), Message('HEARTBEAT'),
@@ -148,7 +149,7 @@ def test_view_link_uses_one_udp_socket_for_stream_command_and_ack():
     view.first_byte = False
     try:
         port = view.port.getsockname()[1]
-        mission = FlightMission('auto')
+        mission = FlightMission('manual')
         mission.step(100, 0, 100, False, True)
         mission.step(112, 0, 112, False, True)
         sample = SimpleNamespace(heartbeat=None, heartbeat_at=0, attitude=None, vfr_hud=None)
@@ -170,7 +171,7 @@ def test_view_link_uses_one_udp_socket_for_stream_command_and_ack():
 
 
 def test_mavlink_status_names_fit_wire_limit_and_denied_start_reports_reason():
-    mission = FlightMission('auto')
+    mission = FlightMission('manual')
     sent = []
     link = ViewLink()
     link.connection = SimpleNamespace(mav=SimpleNamespace(
@@ -182,11 +183,11 @@ def test_mavlink_status_names_fit_wire_limit_and_denied_start_reports_reason():
     assert all(len(name) <= 10 for name, _ in sent)
     assert (b'APP_MSN', 1.) in sent and (b'VIS_READY', 1.) in sent
 
-    target = TargetMission(CliParser().parse(['--mission', 'target-hit']).mission_config)
-    target.phase = Phase.ARMED
+    target = TargetMission(DEFAULT_TARGET_PROFILE)
+    target.phase = Phase.DISARMED
     command = SimpleNamespace(get_type=lambda: 'COMMAND_LONG', get_srcSystem=lambda: 255,
-        get_srcComponent=lambda: 190, target_system=1, target_component=1, command=300,
-        **{f'param{i}': 0. for i in range(1, 8)})
+        get_srcComponent=lambda: 190, target_system=1, target_component=1, command=400,
+        **{f'param{i}': (1. if i == 1 else 0.) for i in range(1, 8)})
     messages = iter((command, None))
     acks, statuses = [], []
     link.connection = SimpleNamespace(recv_match=lambda **_: next(messages), mav=SimpleNamespace(
@@ -194,5 +195,42 @@ def test_mavlink_status_names_fit_wire_limit_and_denied_start_reports_reason():
         statustext_send=lambda *args: statuses.append(args)))
     link.last_view_at = 1.
     link.poll(target, 1.1, 10.)
-    assert acks[0][1] == mavutil.mavlink.MAV_RESULT_DENIED
-    assert b'Live target detector required' in statuses[0][1]
+    assert acks[0][1] == mavutil.mavlink.MAV_RESULT_ACCEPTED
+    assert target.phase == Phase.ARMING
+
+
+def test_hover_profile_and_startup_selection(tmp_path):
+    profile = tmp_path / 'hover.yaml'
+    profile.write_text('altitude_m: 25\nhover_duration_s: 3\n')
+    options = CliParser().parse(['--mission', 'hover-land', '--mission-config', str(profile)])
+    mission = create_mission(options)
+    assert mission.height_m == 25 and mission.hover_duration_s == 3
+    assert mission.mode == 'manual'
+    assert create_mission(CliParser().parse(['--mission', 'target-hit'])).mission_kind == 'target-hit'
+    profile.write_text('altitude_m: 101\nhover_duration_s: 3\n')
+    with pytest.raises(ValueError, match='altitude'):
+        HoverLandSettings.from_yaml(profile)
+    profile.write_text('altitude_m: 20\nhover_duration_s: 0\n')
+    with pytest.raises(ValueError, match='duration'):
+        HoverLandSettings.from_yaml(profile)
+    profile.write_text('altitude_m: 20\n')
+    with pytest.raises(ValueError, match='requires'):
+        HoverLandSettings.from_yaml(profile)
+
+
+def test_auto_start_waits_for_ready_state_and_exits_after_disarm():
+    mission = FlightMission('auto')
+    _advance_automatic_start(mission, 1., 0.)
+    assert mission.phase == Phase.PREARM
+    mission.step(1., 0., 1., False, False)
+    mission.step(13., 0., 13., False, False)
+    _advance_automatic_start(mission, 13., 0.)
+    assert mission.phase == Phase.ARMING
+    mission.step(13.1, 0., 13.1, True, False)
+    _advance_automatic_start(mission, 13.1, 0.)
+    assert mission.phase == Phase.TAKEOFF and mission.started
+    assert _automatic_result(mission, True) is None
+    mission.phase = Phase.DISARMED
+    assert _automatic_result(mission, False) == 0
+    mission.result = 'target not found'
+    assert _automatic_result(mission, False) == 1

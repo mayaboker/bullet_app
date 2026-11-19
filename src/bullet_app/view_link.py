@@ -6,7 +6,7 @@ from pymavlink import mavutil
 from pymavlink.dialects.v20 import common
 from loguru import logger
 
-from .flight import PHASE_IDS, FlightMission, Phase
+from .missions import MissionBase, PHASE_IDS, Phase
 
 APP_SYSTEM_ID = 1
 APP_COMPONENT_ID = 1
@@ -86,7 +86,7 @@ class ViewLink:
     def view_alive(self, now: float) -> bool:
         return self.last_view_at is not None and 0 <= now - self.last_view_at <= VIEW_TIMEOUT_S
 
-    def poll(self, mission: FlightMission, now: float, altitude_m: float | None) -> None:
+    def poll(self, mission: MissionBase, now: float, altitude_m: float | None) -> None:
         for _ in range(32):
             message = self.connection.recv_match(type=['HEARTBEAT', 'COMMAND_LONG'], blocking=False)
             if message is None:
@@ -113,7 +113,7 @@ class ViewLink:
             self.connection.mav.command_ack_send(message.command, result, 0, ACTION_IDS[action],
                                                  VIEW_SYSTEM_ID, VIEW_COMPONENT_ID)
 
-    def publish(self, mission: FlightMission, sample, now: float, firmware_armed: bool) -> None:
+    def publish(self, mission: MissionBase, sample, now: float, firmware_armed: bool) -> None:
         elapsed_ms = int(now * 1000) % 2**32
         elapsed_us = int(now * 1_000_000) % 2**64
         mav = self.connection.mav
@@ -130,7 +130,7 @@ class ViewLink:
                       ('MIS_READY', float(mission.readiness)), ('TAKEOFF_H', mission.height_m),
                       ('APP_MODE', float(mission.mode == 'manual')),
                       ('APP_PHASE', float(PHASE_IDS[mission.phase])),
-                      ('APP_MSN', float({'manual': 0, 'hover-land': 1, 'target-hit': 2}[mission.mission_kind])),
+                      ('APP_MSN', float({'hover-land': 1, 'target-hit': 2}[mission.mission_kind])),
                       ('APP_RESULT', 0.0 if mission.result is None else 1.0 if mission.result == 'hit' else 2.0),
                       ('VIS_READY', float(mission.vision_alive(now) if mission.mission_kind == 'target-hit' else True)))
             for name, value in values:

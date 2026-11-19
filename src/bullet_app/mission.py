@@ -9,10 +9,9 @@ from beta_client.transport import TcpTransport
 from loguru import logger
 from pymavlink import mavutil
 
-from .flight import Command, FlightMission, Phase
+from .missions import Command, Phase, create_mission
 from .view_link import ViewLink
 from .ingress import TargetIngress
-from .target import TargetMission
 
 CONTROL_CENTER = 1500
 AUX_LOW = 1000
@@ -34,9 +33,28 @@ def _send_command(transport: TcpTransport, command: Command) -> None:
     transport.drain_responses()
 
 
+def _advance_automatic_start(mission, now: float, altitude: float) -> None:
+    if mission.started:
+        return
+    if mission.phase == Phase.DISARMED:
+        mission.request('arm', now, automatic=True)
+    elif mission.phase == Phase.ARMED:
+        mission.request('start', now, altitude, automatic=True)
+
+
+def _automatic_result(mission, firmware_armed: bool) -> int | None:
+    if mission.phase == Phase.FAULT and not firmware_armed:
+        return 1
+    if not mission.started:
+        return None
+    if mission.phase == Phase.DISARMED:
+        return 0 if mission.result in (None, 'hit') else 1
+    return None
+
+
 def run_mission(options) -> int:
-    """Keep App available for repeated flights; never own SITL or renderer."""
-    mission = TargetMission(options.mission_config) if options.mission == 'target-hit' else FlightMission(options.mode)
+    """Run one auto flight or serve repeated View-approved flights."""
+    mission = create_mission(options)
     with ExitStack() as resources:
         telemetry = resources.enter_context(MavlinkTelemetry(options.mavlink_endpoint))
         telemetry.set_message_rate(mavutil.mavlink.MAVLINK_MSG_ID_VFR_HUD, TELEMETRY_RATE_HZ)
@@ -73,6 +91,8 @@ def run_mission(options) -> int:
                     try:
                         command = mission.step(now, altitude, sample.vfr_hud_at,
                                                firmware_armed, view.view_alive(now))
+                        if options.mode == 'auto':
+                            _advance_automatic_start(mission, now, altitude)
                     except ValueError as error:
                         mission.fault(str(error), now)
                         command = Command(THROTTLE_MIN, False)
@@ -83,6 +103,11 @@ def run_mission(options) -> int:
                 if mission.phase != previous_phase:
                     logger.info('state: {} ({})', mission.phase.value, options.mode)
                     previous_phase = mission.phase
+                if options.mode == 'auto':
+                    outcome = _automatic_result(mission, firmware_armed)
+                    if outcome is not None:
+                        logger.info('mission finished: {}', 'success' if outcome == 0 else 'failed')
+                        return outcome
                 if now - last_log >= LOG_PERIOD_S and altitude is not None:
                     datum = mission.ground_altitude_m if mission.ground_altitude_m is not None else altitude
                     logger.info('altitude={:.2f} m speed={:.2f} m/s throttle={} armed={} view={}',

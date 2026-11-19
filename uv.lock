@@ -30,6 +30,7 @@ dependencies = [
     { name = "loguru" },
     { name = "los-tracking" },
     { name = "pymavlink" },
+    { name = "pyyaml" },
     { name = "pyzmq" },
 ]
 
@@ -46,6 +47,7 @@ requires-dist = [
     { name = "loguru", specifier = ">=0.7,<1" },
     { name = "los-tracking", editable = "../los_tracking" },
     { name = "pymavlink", specifier = ">=2.4.50,<3" },
+    { name = "pyyaml", specifier = ">=6,<7" },
     { name = "pyzmq", specifier = ">=27,<28" },
 ]
 

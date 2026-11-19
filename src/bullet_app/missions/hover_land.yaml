@@ -1,0 +1,4 @@
+# Height above launch in metres; allowed 0.1–100. Loaded once at App startup.
+altitude_m: 20.0
+# Continuous time near the requested height in seconds; must be positive.
+hover_duration_s: 10.0

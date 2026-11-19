@@ -2,23 +2,23 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Bullet: Run app (choose mission)",
+      "label": "Bullet: Run app (manual approval, choose mission)",
       "icon": { "id": "play", "color": "terminal.ansiGreen" },
       "type": "shell",
-      "command": "uv run --locked bullet-app --mode auto --mission ${input:mission}",
+      "command": "uv run --locked bullet-app --mode manual --mission ${input:mission}",
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": [],
       "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
-      "detail": "Choose hover-land or target-hit. For target-hit, first run Bullet: Run target scene (SITL + renderer + visual), then use View Arm and Start."
+      "detail": "Choose a mission; Bullet View must send Arm and Start."
     },
     {
-      "label": "Bullet: Run app (manual)",
+      "label": "Bullet: Run app (auto start, choose mission)",
       "icon": {
         "id": "play",
         "color": "terminal.ansiGreen"
       },
       "type": "shell",
-      "command": "uv run --locked bullet-app --mode manual",
+      "command": "uv run --locked bullet-app --mode auto --mission ${input:mission}",
       "options": {
         "cwd": "${workspaceFolder}"
       },
@@ -28,14 +28,14 @@
         "panel": "dedicated",
         "clear": true
       },
-      "detail": "Start Manual mode; wait for Bullet View Arm, Apply height, Takeoff and Land commands."
+      "detail": "Choose a mission; App arms and starts automatically after fresh SITL telemetry."
     }
   ],
   "inputs": [
     {
       "id": "mission",
       "type": "pickString",
-      "description": "Choose the automatic mission to load",
+      "description": "Choose the mission to load",
       "options": [
         { "label": "Hover 10 seconds, then land", "value": "hover-land" },
         { "label": "Search for and hit the red truck", "value": "target-hit" }
