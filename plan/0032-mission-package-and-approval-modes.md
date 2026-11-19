@@ -1,7 +1,7 @@
 # Mission package and approval modes
 
-Status: Pending
-Implementation commit: Pending
+Status: Implemented; tests and SITL smoke passed
+Implementation commit: d4fae85bf7d75faeefb01fcf5438a3b0385949db
 
 Goal: Separate shared flight behavior from hover/land and target-hit missions. Make hover/land use a startup YAML profile with 20 m and 10 s defaults, and make manual/auto an approval choice for either mission.
 

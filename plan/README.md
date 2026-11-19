@@ -33,4 +33,4 @@
 | [0029 Replace GitHub main](0029-replace-github-main.md) | Refresh the lockfile and publish this checkout while backing up the unrelated GitHub history. | Published and verified | `c0dcd83ccdeeb4fb48dceecd07f6fa291f6a6263` |
 | [0030 Selectable target mission](0030-selectable-target-mission.md) | Add startup-selected red-truck search and MAVLink/bbox LOS guidance. | Pending; focused tests passed, live SITL check blocked by occupied port | Pending |
 | [0031 VS Code mission choice](0031-vscode-mission-choice.md) | Choose hover-land or target-hit when running the automatic App task. | Pending; task and CLI values verified | Pending |
-| [0032 Mission package and approval modes](0032-mission-package-and-approval-modes.md) | Separate missions, configure hover/land, and use manual/auto approval for either mission. | Pending; tests and SITL smoke passed | Pending |
+| [0032 Mission package and approval modes](0032-mission-package-and-approval-modes.md) | Separate missions, configure hover/land, and use manual/auto approval for either mission. | Implemented; tests and SITL smoke passed | `d4fae85bf7d75faeefb01fcf5438a3b0385949db` |
