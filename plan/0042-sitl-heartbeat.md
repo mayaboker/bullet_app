@@ -8,4 +8,4 @@ Interface: App heartbeat custom_mode bit 0 means the MSP board identifier was SI
 
 Verification: beta_client's 34 unittest cases and App's 36 pytest cases passed. A live Betaflight SITL answered `MSP_BOARD_INFO` with `SITL`, and a running App sent `HEARTBEAT.custom_mode = 1` to a UDP listener on View's port.
 
-Scope/defaults: No flight gate or firmware changes. Status: Implemented and verified. Implementation commit: Pending.
+Scope/defaults: No flight gate or firmware changes. Status: Implemented and verified. Implementation commits: `3fbc039dd13634274c1896758f830876c598b8c9` (beta_client), `ed4d66aa2c2c392e612a9f8529ed32e6b81d371e` (App).
