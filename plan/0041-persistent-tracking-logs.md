@@ -10,4 +10,4 @@ Verification: log path and sink tests, checkpoint cadence and missing-field test
 
 Scope/defaults: one file per App process, no automatic retention cleanup; terminal remains INFO, file captures DEBUG. If file creation fails, the mission does not start. No commit requested.
 
-Status: Implemented; 36 App tests passed, CLI startup created a log in the requested directory, and the workspace ignore rule matched. Implementation commit: Pending (no commit requested).
+Status: Implemented; 36 App tests passed, CLI startup created a log in the requested directory, and the workspace ignore rule matched. Implementation commits: `3b40552` (App), `e81c4db` (workspace).
