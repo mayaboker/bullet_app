@@ -14,6 +14,7 @@ from .missions import Command, Phase, create_mission
 from .view_link import ViewLink
 from .ingress import TargetIngress
 from .rate_monitor import RateMonitor
+from .tracking_log import TrackingLog
 
 CONTROL_CENTER = 1500
 AUX_LOW = 1000
@@ -59,6 +60,7 @@ def _automatic_result(mission, firmware_armed: bool) -> int | None:
 def run_mission(options) -> int:
     """Run one auto flight or serve repeated View-approved flights."""
     mission = create_mission(options)
+    tracking_log = TrackingLog() if mission.mission_kind == 'target-hit' else None
     with ExitStack() as resources:
         telemetry = resources.enter_context(MavlinkTelemetry(options.mavlink_endpoint))
         telemetry.set_message_rate(mavutil.mavlink.MAVLINK_MSG_ID_VFR_HUD, TELEMETRY_RATE_HZ)
@@ -113,6 +115,8 @@ def run_mission(options) -> int:
                 else:
                     command = Command(THROTTLE_MIN, False)
                 _send_command(transport, command)
+                if tracking_log is not None:
+                    tracking_log.observe(mission, sample, command, altitude, now)
                 view.publish(mission, sample, now, firmware_armed if heartbeat_fresh else False)
                 for name, event, hz in rates.check(now, sample.attitude_hz, sample.vfr_hud_hz):
                     if event == 'low':

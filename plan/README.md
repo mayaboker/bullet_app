@@ -42,3 +42,4 @@
 | [0038 LOS sensor tick staleness](0038-los-sensor-tick-staleness.md) | Keep fresh MAVLink samples available across estimator ticks and diagnose LOS faults. | Implemented; tests and live barometer check passed | `cd22cd8` |
 | [0039 Manual target settings](0039-manual-target-settings.md) | Interim two-value target settings design. | Superseded by 0040 | `cd22cd8` |
 | [0040 Height-only target control](0040-height-only-target-control.md) | Restore one target height setting and fix pre-search hover at five seconds. | Implemented; 32 App tests passed | `cd22cd8` |
+| [0041 Persistent tracking logs](0041-persistent-tracking-logs.md) | Save each App run and 5 Hz target guidance checkpoints in workspace logs. | Implemented; 36 App tests and CLI smoke passed | Pending (no commit requested) |
