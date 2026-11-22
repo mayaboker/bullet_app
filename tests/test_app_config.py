@@ -7,6 +7,7 @@ import pytest
 from bullet_app import app
 from bullet_app.cli import CliParser
 from bullet_app.config import AppConfig, ConnectionType, DEFAULT_CONFIG
+from bullet_app.telemetry_publisher import needs_timesync
 
 
 SERIAL_CONFIG = """betaflight:
@@ -29,6 +30,39 @@ def test_packaged_config_keeps_existing_tcp_connections():
     assert (config.mavlink.type, config.mavlink.endpoint, config.mavlink.baudrate) == (
         ConnectionType.TCP, 'tcp:127.0.0.1:5762', 57600)
     assert not config.simulation.enabled
+    assert not config.telemetry_publisher.enabled
+    assert config.telemetry_publisher.endpoint == 'tcp://127.0.0.1:5558'
+
+
+def test_publisher_config_is_opt_in_and_rates_are_independent(tmp_path):
+    path = tmp_path / 'app.yaml'
+    path.write_text(SERIAL_CONFIG + 'telemetry_publisher:\n'
+                    '  endpoint: tcp://127.0.0.1:5557\n'
+                    '  topics:\n'
+                    '    telemetry/attitude: 25\n'
+                    '    view/alive: 2.5\n'
+                    '    visual/bbox: 0\n')
+    config = AppConfig.from_yaml(path)
+    assert config.telemetry_publisher.enabled
+    assert dict(config.telemetry_publisher.topics) == {
+        'telemetry/attitude': 25.0, 'view/alive': 2.5, 'visual/bbox': 0.0}
+    assert needs_timesync(config.telemetry_publisher)
+    assert not needs_timesync(AppConfig.from_yaml(DEFAULT_CONFIG).telemetry_publisher)
+
+
+@pytest.mark.parametrize('topics,endpoint', (
+    ('telemetry/attitude: -1', 'tcp://127.0.0.1:5557'),
+    ('telemetry/attitude: 51', 'tcp://127.0.0.1:5557'),
+    ('telemetry/attitude: true', 'tcp://127.0.0.1:5557'),
+    ('other/topic: 1', 'tcp://127.0.0.1:5557'),
+    ('view/alive: 1', 'tcp://0.0.0.0:5557'),
+))
+def test_invalid_publisher_config_fails_before_open(tmp_path, topics, endpoint):
+    path = tmp_path / 'app.yaml'
+    path.write_text(SERIAL_CONFIG + 'telemetry_publisher:\n'
+                    f'  endpoint: {endpoint}\n  topics:\n    {topics}\n')
+    with pytest.raises(ValueError, match='telemetry_publisher|FPS'):
+        AppConfig.from_yaml(path)
 
 
 def test_sitl_config_enables_contact_and_cli_override_requires_yaml_gate():

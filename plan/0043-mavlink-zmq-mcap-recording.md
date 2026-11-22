@@ -14,4 +14,4 @@ Verification: Test exact packet-byte and topic preservation, source filtering, a
 
 Scope/defaults: Publication is opt-in and uses the existing loopback sample endpoint. `time.time_ns()` at ZMQ publication is the publish timestamp; Betaflight `time_boot_ms` remains inside the raw packet. GPS and command acknowledgments are out of scope. Start the bagger before App to reduce PUB/SUB startup loss. No code, configuration, or runtime behavior has been changed by saving this plan.
 
-Status: Planned. Implementation commit: Pending.
+Status: Superseded by plan 0063, which publishes decoded blackboard MsgPack at configured rates. Implementation commit: Pending.

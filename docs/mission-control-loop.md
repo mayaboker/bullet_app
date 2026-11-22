@@ -10,6 +10,7 @@ flowchart LR
     View["Bullet View"]
     Visual["Bullet Visual detections"]
     Contact["Simulation contact publisher"]
+    Bagger["mcap_bagger"]
 
     subgraph App["Bullet App"]
         Entry["main.py + CLI<br/>logging and options"]
@@ -29,6 +30,7 @@ flowchart LR
         Navigator["LosNavigator<br/>LOS guidance"]
         Diagnostics["RuntimeDiagnostics<br/>rate, flight, and LOS logs"]
         Tracking["TrackingLog<br/>target guidance checkpoints"]
+        Publisher["Optional background publisher<br/>MsgPack + ZMQ"]
     end
 
     Entry --> Runner
@@ -50,13 +52,14 @@ flowchart LR
     Blackboard --> Link
     Blackboard --> Diagnostics
     Blackboard --> Tracking
+    Blackboard --> Publisher -->|"timestamped opaque payloads"| Bagger
     Runner --> Diagnostics
     Target --> Tracking
 ```
 
 `run_mission` creates one selected mission. Both implementations share `MissionBase` for arming, takeoff, altitude hold, landing, and disarming. `TargetMission` adds search, centering, settling, line-of-sight (LOS) guidance, and contact handling. The target estimator aligns timestamped camera observations with MAVLink attitude and altitude before passing them to `LosNavigator`.
 
-`run_mission` resets the process-global `Blackboard` before creating a mission. Each tick replaces its immutable MAVLink snapshot, adds validated target observations, polls View commands, and passes `StepContext(blackboard, now_s)` to `mission.step()`. View reads current telemetry from the board; tracking diagnostics read its accepted bbox, optional simulation contact, and current target navigation input/result. Contact lives in `blackboard.simulation`, separate from `blackboard.visual`. Source receive and capture timestamps remain attached to their data. Mission phase, timers, and the altitude controller remain on the mission; the `transitions` machine still checks legal phase changes rather than reading sensor conditions directly from the blackboard.
+`run_mission` resets the process-global `Blackboard` before creating a mission. Each tick replaces its immutable MAVLink snapshot, adds validated target observations, polls View commands, and passes `StepContext(blackboard, now_s)` to `mission.step()`. View reads current telemetry from the board; tracking diagnostics read its accepted bbox, optional simulation contact, and current target navigation input/result. Contact lives in `blackboard.simulation`, separate from `blackboard.visual`. An optional [background publisher](telemetry-publishing.md) reads the board on its own schedule and sends MsgPack values to `mcap_bagger`; the mission tick does not encode or send them. Source receive and capture timestamps remain attached to their data. Mission phase, timers, and the altitude controller remain on the mission; the `transitions` machine still checks legal phase changes rather than reading sensor conditions directly from the blackboard.
 
 At startup, App also queries `MSP_BOARD_INFO` on the MSP connection and reports whether it identified a SITL firmware target in its View heartbeat. This check does not measure whether the simulator is exchanging data.
 
@@ -78,7 +81,7 @@ flowchart TD
     K --> A
 ```
 
-The MAVLink receiver runs in its own thread and updates a thread-safe snapshot. App requests `VFR_HUD` and `ATTITUDE` at 50 Hz; `target-hit` also enables `TIMESYNC`. The control loop reads the latest values without waiting for a new packet. It uses `HEARTBEAT.base_mode` to observe whether Betaflight is armed and `VFR_HUD.alt` as its altitude measurement. The shared altitude controller updates its throttle estimate only when a new altitude sample arrives.
+The MAVLink receiver runs in its own thread and updates a thread-safe snapshot. App requests `VFR_HUD` and `ATTITUDE` at 50 Hz; `target-hit` and source-timestamped telemetry publication also enable `TIMESYNC`. The control loop reads the latest values without waiting for a new packet. It uses `HEARTBEAT.base_mode` to observe whether Betaflight is armed and `VFR_HUD.alt` as its altitude measurement. The shared altitude controller updates its throttle estimate only when a new altitude sample arrives.
 
 In manual mode, View's Arm, Start, Land, and Disarm commands enter through `ViewLink.poll`; manual target missions also accept height changes while idle. View heartbeat loss makes an armed idle mission disarm or an airborne mission land. In auto mode, App requests Arm and Start itself after the shared mission reaches the appropriate phase. A target mission additionally requires fresh TIMESYNC before Arm or Start.
 

@@ -2,6 +2,7 @@
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from bullet_app import app
 from bullet_app.blackboard import Blackboard, StepContext
@@ -58,7 +59,8 @@ def test_missing_altitude_keeps_startup_allowance_then_faults():
 
 @pytest.mark.parametrize('serial', (False, True))
 @pytest.mark.parametrize('stale', (False, True))
-def test_auto_run_publishes_before_result_and_final_disarm(monkeypatch, tmp_path, serial, stale):
+@pytest.mark.parametrize('recording', (False, True))
+def test_auto_run_publishes_before_result_and_final_disarm(monkeypatch, tmp_path, serial, stale, recording):
     events = []
     connections = []
 
@@ -136,17 +138,34 @@ def test_auto_run_publishes_before_result_and_final_disarm(monkeypatch, tmp_path
     monkeypatch.setattr(app, 'ViewLink', View)
     monkeypatch.setattr(app, 'create_mission', lambda *_: Mission())
     monkeypatch.setattr(app, 'RuntimeDiagnostics', Diagnostics)
+
+    class Publisher(Resource):
+        def __init__(self, config, blackboard):
+            events.append('publisher constructed')
+
+        def __enter__(self):
+            events.append('publisher started')
+            return self
+
+        def __exit__(self, *_):
+            events.append('publisher closed')
+
+    monkeypatch.setattr(app, 'TelemetryPublisher', Publisher)
     monkeypatch.setattr(app, 'read_board_identifier', lambda *_: 'SITL')
     monkeypatch.setattr(app.time, 'monotonic', lambda: 100.0)
     monkeypatch.setattr(app, '_send_command', lambda _transport, command: events.append(f'send {command.throttle}'))
 
     config_path = DEFAULT_CONFIG
-    if serial:
+    if serial or recording:
         config_path = tmp_path / 'app.yaml'
-        config_path.write_text('betaflight:\n  msp:\n    type: serial\n'
-                               '    device: /dev/ttyUSB0\n    baudrate: 115200\n'
-                               '  mavlink:\n    type: serial\n'
-                               '    endpoint: /dev/ttyUSB1\n    baudrate: 57600\n')
+        data = yaml.safe_load(DEFAULT_CONFIG.read_text())
+        if serial:
+            data['betaflight']['msp'] = {'type': 'serial', 'device': '/dev/ttyUSB0', 'baudrate': 115200}
+            data['betaflight']['mavlink'] = {
+                'type': 'serial', 'endpoint': '/dev/ttyUSB1', 'baudrate': 57600}
+        if recording:
+            data['telemetry_publisher']['topics'] = {'view/alive': 1}
+        config_path.write_text(yaml.safe_dump(data))
     options = SimpleNamespace(mission='hover-land', config=config_path,
                               mavlink_endpoint=None, msp_host=None, msp_port=None,
                               contact_endpoint=None)
@@ -156,5 +175,6 @@ def test_auto_run_publishes_before_result_and_final_disarm(monkeypatch, tmp_path
                             ('mavlink', 'tcp:127.0.0.1:5762', None),
                             ('msp tcp', '127.0.0.1', 5761)])
     command_events = ['send 1000', 'observed 1000'] if stale else ['step', 'send 1300', 'observed 1300']
-    assert events == ['poll', *command_events, 'publish', 'diagnostics',
-                      'send 1000', 'send 1000', 'send 1000']
+    assert events == (['publisher constructed', 'publisher started'] if recording else []) + [
+        'poll', *command_events, 'publish', 'diagnostics',
+        'send 1000', 'send 1000', 'send 1000'] + (['publisher closed'] if recording else [])

@@ -14,6 +14,7 @@ from .config import AppConfig, ConnectionType
 from .tracker import TrackerSubscriber
 from .missions import Action, Command, Mode, Phase, create_mission
 from .runtime_diagnostics import RuntimeDiagnostics
+from .telemetry_publisher import TelemetryPublisher, needs_timesync
 from .view_link import ViewLink
 
 CONTROL_CENTER = 1500
@@ -149,7 +150,7 @@ def run_mission(options) -> int:
         telemetry = resources.enter_context(_open_mavlink(config))
         telemetry.set_message_rate(mavutil.mavlink.MAVLINK_MSG_ID_VFR_HUD, TELEMETRY_RATE_HZ)
         telemetry.set_message_rate(mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, TELEMETRY_RATE_HZ)
-        if options.mission == 'target-hit':
+        if options.mission == 'target-hit' or needs_timesync(config.telemetry_publisher):
             telemetry.enable_timesync()
 
         transport = resources.enter_context(_open_msp(config))
@@ -160,6 +161,8 @@ def run_mission(options) -> int:
 
         tracker = _open_tracker(options, resources)
         simulation = _open_simulation(options, config, resources)
+        if config.telemetry_publisher.enabled:
+            resources.enter_context(TelemetryPublisher(config.telemetry_publisher, blackboard))
         try:
             connected_at = time.monotonic()
             next_tick = connected_at

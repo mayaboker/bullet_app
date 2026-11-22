@@ -12,6 +12,7 @@ App runs a 50 Hz loop for hover/land or red-truck target-hit. Bullet View sends 
 - Optional simulator contact confirmation for target-hit, enabled in YAML.
 - Manual View approval or one automatic attempt, with telemetry and View loss handling.
 - Colored terminal logs for every mission phase change and persistent target tracking checkpoints.
+- Optional background MsgPack/ZMQ publication of blackboard values for MCAP recording.
 
 ## Architecture
 
@@ -20,6 +21,8 @@ flowchart LR
     FC[Betaflight] -->|MAVLink| App[Bullet App]
     Tracker[Visual tracker] -->|ZMQ boxes| App
     Sim[Optional simulator contact] -->|ZMQ contact| App
+    App -->|Blackboard values| Publisher[Background ZMQ publisher]
+    Publisher -->|MsgPack + Unix time header| Bagger[mcap_bagger]
     View[Bullet View] <-->|MAVLink UDP| App
     App -->|MSP RC| FC
 ```
@@ -81,6 +84,8 @@ The App VS Code mission tasks use this SITL config. The workspace target-hit sta
 
 The bundled [app.yaml](src/bullet_app/app.yaml) selects independent MSP and MAVLink connections and disables simulator contact. The [SITL config](src/bullet_app/app.sitl.yaml) enables it. Copy either file and pass `--config path/to/app.yaml` for another setup; every field is documented beside its value. Select `tcp` or `serial` independently for MSP and MAVLink. Serial MSP uses `device` and `baudrate`; serial MAVLink uses a device `endpoint` and `baudrate`.
 
+`telemetry_publisher` in the same YAML binds `tcp://127.0.0.1:5558` for MCAP recording. All bundled topic rates are `0`, so the worker stays off. Set individual rates from `0` to `50` FPS; positive rates repeat the latest available value. For example, set `telemetry/attitude: 25` and `visual/bbox: 10`, then start `mcap_bagger` with matching channel topics and endpoint before App. The [publisher protocol guide](docs/telemetry-publishing.md) lists every topic, timestamp rule, and the three-frame ZMQ envelope.
+
 | Setting | Default | Use |
 | --- | --- | --- |
 | `simulation.enabled` | `false` | Open simulator contact only for target-hit when true. |
@@ -97,6 +102,7 @@ The bundled [app.yaml](src/bullet_app/app.yaml) selects independent MSP and MAVL
 - `src/bullet_app/tracker.py`: tracker box subscriber.
 - `src/bullet_app/simulation.py`: optional simulator contact subscriber.
 - `src/bullet_app/blackboard.py`: current observations and step context.
+- `src/bullet_app/telemetry_publisher.py`: optional background MsgPack/ZMQ publisher.
 - `tests/`: App tests; `docs/`: mission guides and diagrams.
 
 ## Development
@@ -114,6 +120,7 @@ uv run --locked pytest -q
 - [Mission control loop](docs/mission-control-loop.md)
 - [Hover/land mission](docs/hover-land-mission.md)
 - [Target-hit mission](docs/target-hit-mission.md)
+- [Blackboard telemetry publication](docs/telemetry-publishing.md)
 
 ## Troubleshooting
 

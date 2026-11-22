@@ -44,7 +44,7 @@
 | [0040 Height-only target control](0040-height-only-target-control.md) | Restore one target height setting and fix pre-search hover at five seconds. | Implemented; 32 App tests passed | `cd22cd8` |
 | [0041 Persistent tracking logs](0041-persistent-tracking-logs.md) | Save each App run and 5 Hz target guidance checkpoints in workspace logs. | Implemented; 36 App tests and CLI smoke passed | `3b40552` (App), `e81c4db` (workspace) |
 | [0042 SITL identification in App heartbeat](0042-sitl-heartbeat.md) | Query MSP board identity at startup and carry SITL confirmation in App heartbeat. | Implemented; tests and live SITL heartbeat passed | `3fbc039dd13634274c1896758f830876c598b8c9` (beta_client), `ed4d66aa2c2c392e612a9f8529ed32e6b81d371e` (App) |
-| [0043 Raw MAVLink ZMQ/MCAP recording](0043-mavlink-zmq-mcap-recording.md) | Publish selected raw MAVLink packets with a timestamp envelope for opaque MCAP recording. | Planned | Pending |
+| [0043 Raw MAVLink ZMQ/MCAP recording](0043-mavlink-zmq-mcap-recording.md) | Earlier raw-packet approach replaced by blackboard MsgPack publication in 0063. | Superseded | Pending |
 | [0044 Mission control loop diagram](0044-mission-control-loop-diagram.md) | Explain App components and its 50 Hz loop with Mermaid diagrams. | Implemented; links and source checked | `b6fd6f7`, `fae5430` (follow-up) |
 | [0045 Hover-land mission guide](0045-hover-land-mission-guide.md) | Explain the implemented hover-land mission, control thresholds, and operator behavior. | Implemented; links and source checked | `b6fd6f7`, `fae5430` (follow-up) |
 | [0046 Transitions mission state machine](0046-transitions-mission-state-machine.md) | Move shared and target mission phases into an ordered transitions machine. | Implemented; 42 tests passed | `b6fd6f7`, `fae5430` (follow-up) |
@@ -64,3 +64,5 @@
 | [0060 Separate tracker and simulation inputs](0060-separate-tracker-simulation.md) | Split tracker boxes from optional simulator contact and gate contact through YAML. | Implemented; 77 tests passed | Pending (no commit requested) |
 | [0061 Independent input openers](0061-independent-input-openers.md) | Give tracker and optional simulation contact separate App setup paths. | Implemented; 78 tests passed | Pending (no commit requested) |
 | [0062 Colored mission state logs](0062-colored-mission-state-logs.md) | Log each accepted mission phase change with terminal color. | Implemented; 79 tests passed | Pending (no commit requested) |
+| [0063 Blackboard MCAP publisher](0063-blackboard-mcap-publisher.md) | Publish configured blackboard values through an isolated MsgPack/ZMQ worker. | Implemented; 96 App and 78 bagger tests passed | Pending (no commit requested) |
+| [0064 Telemetry publisher port](0064-telemetry-publisher-port.md) | Move the App publisher off renderer control port 5557 and align recorder subscriptions. | Implemented; 26 App and 18 Bagger tests passed | Pending (no commit requested) |
