@@ -49,7 +49,7 @@ Before connecting View, App queries `MSP_BOARD_INFO` and marks SITL as confirmed
 
 ## Phase sequence
 
-`MissionBase` uses `transitions.Machine` to own the phase graph. Each control tick checks measurements and timing, then requests a destination phase when a condition is met. The machine's ordered `resolve()` transitions allow only registered phase changes; a phase-entry callback records the new start time and performs any controller or timer reset. The sensor and timing decisions remain in the mission methods, while the machine enforces which phase changes are legal. View commands use the same path, so an accepted Arm, Start, or Land request changes phase immediately.
+`MissionBase` uses `transitions.Machine` to own the phase graph. Each control tick passes a `StepContext` containing the process-wide blackboard and monotonic time to `step()`. The blackboard holds the latest MAVLink snapshot and View liveness; `step()` checks its altitude and arm feedback, then requests a destination phase when a condition is met. The machine's ordered `resolve()` transitions allow only registered phase changes; a phase-entry callback records the new start time and performs any controller or timer reset. The sensor and timing decisions remain in the mission methods, while the machine enforces which phase changes are legal. View commands use the same path, so an accepted Arm, Start, or Land request changes phase immediately.
 
 ```mermaid
 flowchart LR

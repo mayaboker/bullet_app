@@ -2,6 +2,7 @@
 from loguru import logger
 
 from .missions import Phase
+from .blackboard import StepContext
 
 CHECKPOINT_PERIOD_S = 0.2
 TRACKING_PHASES = frozenset((Phase.SEARCH, Phase.CENTER, Phase.SETTLE, Phase.LOS, Phase.COMMIT))
@@ -20,16 +21,18 @@ class TrackingLog:
         self.last_contact = False
         self.last_result = None
 
-    def observe(self, mission, sample, command, altitude_m, now):
+    def observe(self, mission, context: StepContext, command):
         """Log transitions once and sample active guidance at no more than 5 Hz."""
-        packet = mission.bbox
+        now = context.now_s
+        sample = context.blackboard.telemetry
+        packet = context.blackboard.visual.bbox
         box = mission._visual_box(now) if packet is not None else None
         visible = box is not None
         if visible != self.last_visible:
             logger.debug('target event={} at={:.3f} phase={} bbox={}',
                          'visible' if visible else 'lost', now, mission.phase.value, box)
             self.last_visible = visible
-        if mission.contact and not self.last_contact:
+        if context.blackboard.visual.contact and not self.last_contact:
             logger.info('target event=contact at={:.3f} phase={}', now, mission.phase.value)
             self.last_contact = True
         if mission.result != self.last_result:
@@ -38,7 +41,7 @@ class TrackingLog:
                              now, mission.phase.value, mission.result)
             self.last_result = mission.result
 
-        navigation = mission.last_navigation_result if mission.phase in LOS_PHASES else None
+        navigation = context.blackboard.features.navigation_result if mission.phase in LOS_PHASES else None
         if navigation is not None and navigation.stage != self.last_stage:
             logger.info('LOS stage={} at={:.3f} state={} reason={}',
                         navigation.stage.value, now, navigation.state.value, navigation.reason)
@@ -52,7 +55,7 @@ class TrackingLog:
         demand = None if navigation is None else navigation.command
         yaw = None if sample.attitude is None else sample.attitude.yaw
         datum = mission.ground_altitude_m
-        relative_altitude = None if altitude_m is None or datum is None else altitude_m - datum
+        relative_altitude = None if context.altitude_m is None or datum is None else context.altitude_m - datum
         image_age = None if packet is None else now - packet['capture_ns'] / 1e9
         bbox_error = None if box is None else box['x'] + box['width'] / 2 - mission.config.camera.cx_px
         logger.debug(

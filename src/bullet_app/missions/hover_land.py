@@ -30,8 +30,16 @@ class HoverLandSettings:
 
 
 class HoverLandMission(MissionBase):
-    def __init__(self, settings: HoverLandSettings, mode='manual'):
-        super().__init__(mode, 'hover-land', settings.altitude_m, settings.hover_duration_s)
+    def __init__(self, settings: HoverLandSettings, mode='manual', blackboard=None):
+        super().__init__(mode, 'hover-land', settings.altitude_m, settings.hover_duration_s, blackboard)
+
+    def request_height(self, height_m: float) -> None:
+        """Reject height edits because the hover profile fixes the flight height."""
+        raise ValueError('Height is fixed by the mission profile')
+
+    def vision_alive(self, now: float) -> bool:
+        """Report ready because hover-land does not use camera detections."""
+        return True
 
     def _on_hover_complete(self, now):
         self._enter(Phase.LAND, now)

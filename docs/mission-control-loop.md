@@ -15,7 +15,8 @@ flowchart LR
         Entry["main.py + CLI<br/>logging and options"]
         Runner["mission.py<br/>run_mission, 50 Hz"]
         Telemetry["beta_client<br/>MAVLink receiver thread"]
-        Snapshot["Latest telemetry snapshot<br/>heartbeat, attitude, VFR_HUD, TIMESYNC"]
+        Blackboard["Process-wide blackboard<br/>MAVLink, visual, target features"]
+        Context["StepContext<br/>blackboard + monotonic time"]
         Msp["beta_client<br/>MSP TCP transport"]
         Link["ViewLink<br/>commands, ACKs, state"]
         Ingress["TargetIngress<br/>ZMQ subscribers"]
@@ -30,23 +31,29 @@ flowchart LR
 
     Entry --> Runner
     FC -->|"MAVLink TCP 5762"| Telemetry
-    Telemetry --> Snapshot --> Runner
+    Telemetry --> Runner --> Blackboard
+    Runner --> Context --> Hover
+    Context --> Target
+    Blackboard --> Context
     Runner -->|"RC channels"| Msp -->|"MSP TCP 5761"| FC
     View <-->|"MAVLink UDP 14550"| Link
     Link <-->|"operator requests / App state"| Runner
     Visual -->|"bbox, target only"| Ingress
     Contact -->|"confirmed hit, target only"| Ingress
     Ingress --> Runner
-    Runner --> Hover
-    Runner --> Target
     Hover --> Base
     Target --> Base
     Base --> Altitude
     Target --> Estimator --> Navigator --> Target
+    Target -->|"accepted bbox, navigation output"| Blackboard
+    Blackboard --> Link
+    Blackboard --> Diagnostics
     Runner --> Diagnostics
 ```
 
 `run_mission` creates one selected mission. Both implementations share `MissionBase` for arming, takeoff, altitude hold, landing, and disarming. `TargetMission` adds search, centering, settling, line-of-sight (LOS) guidance, and contact handling. The target estimator aligns timestamped camera observations with MAVLink attitude and altitude before passing them to `LosNavigator`.
+
+`run_mission` resets the process-global `Blackboard` before creating a mission. Each tick replaces its immutable MAVLink snapshot, adds validated target observations, polls View commands, and passes `StepContext(blackboard, now_s)` to `mission.step()`. View reads current telemetry from the board; tracking diagnostics read its accepted bbox/contact data and current target navigation input/result. Source receive and capture timestamps remain attached to their data. Mission phase, timers, and the altitude controller remain on the mission; the `transitions` machine still checks legal phase changes rather than reading sensor conditions directly from the blackboard.
 
 At startup, App also queries `MSP_BOARD_INFO` on the MSP connection and reports whether it identified a SITL firmware target in its View heartbeat. This check does not measure whether the simulator is exchanging data.
 
@@ -54,11 +61,11 @@ At startup, App also queries `MSP_BOARD_INFO` on the MSP connection and reports 
 
 ```mermaid
 flowchart TD
-    A["Read latest MAVLink snapshot"] --> B["For target-hit: observe TIMESYNC,<br/>poll bbox and contact"]
+    A["Read MAVLink snapshot into blackboard"] --> B["For target-hit: observe TIMESYNC,<br/>poll bbox and contact into blackboard"]
     B --> C["Poll View heartbeat and commands"]
     C --> D["Check firmware arm state<br/>and telemetry freshness"]
     D --> E{"Fresh heartbeat and altitude,<br/>no mission fault?"}
-    E -->|Yes| F["Step selected mission"]
+    E -->|Yes| F["Step selected mission with StepContext"]
     F --> G["In auto mode, request Arm or Start<br/>when its phase permits"]
     E -->|No| H["Fault if freshness timeout elapsed;<br/>choose throttle 1000, disarmed"]
     G --> I["Send RC command over MSP"]

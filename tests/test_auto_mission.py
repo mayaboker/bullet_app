@@ -11,16 +11,17 @@ from bullet_app.missions import create_mission
 from bullet_app.missions.hover_land import HoverLandSettings
 from bullet_app.view_link import SITL_CONFIRMED_CUSTOM_MODE, ViewLink, _command
 from bullet_app.target import TargetMission
+from conftest import context, tick
 
 
 def ready(mode='manual', ground=42.0):
     mission = FlightMission(mode)
-    assert mission.step(100, ground, 100, False, True) == Command(1000, False)
-    mission.step(112, ground, 112, False, True)
+    assert tick(mission, 100, ground, 100, False, True) == Command(1000, False)
+    tick(mission, 112, ground, 112, False, True)
     assert mission.phase == Phase.DISARMED
     mission.request('arm', 112.1, automatic=mode == 'auto')
-    assert mission.step(112.2, ground, 112.2, False, True).arm
-    mission.step(112.3, ground, 112.3, True, True)
+    assert tick(mission, 112.2, ground, 112.2, False, True).arm
+    tick(mission, 112.3, ground, 112.3, True, True)
     assert mission.phase == Phase.ARMED
     mission.request('start', 112.4, ground, automatic=mode == 'auto')
     return mission
@@ -30,28 +31,28 @@ def test_auto_runs_without_view_and_stops_after_one_flight():
     mission = FlightMission('auto')
     with pytest.raises(ValueError):
         mission.request('arm', 1)
-    mission.step(100, 42, 100, False, True)
-    mission.step(112, 42, 112, False, True)
+    tick(mission, 100, 42, 100, False, True)
+    tick(mission, 112, 42, 112, False, True)
     assert mission.phase == Phase.DISARMED
     mission = ready('auto')
-    mission.step(113, 61.9, 113, True, False)
-    mission.step(113.1, 62, 113.1, True, False)
+    tick(mission, 113, 61.9, 113, True, False)
+    tick(mission, 113.1, 62, 113.1, True, False)
     for now in (113.3, 113.5, 113.7):
-        mission.step(now, 62, now, True, False)
+        tick(mission, now, 62, now, True, False)
     assert mission.phase == Phase.HOVER
     for index in range(1, 60):
         now = 113.7 + index * .2
-        mission.step(now, 62, now, True, False)
+        tick(mission, now, 62, now, True, False)
         if mission.phase == Phase.LAND:
             break
     assert mission.phase == Phase.LAND
     land_start = now + .1
-    mission.step(land_start, 42.1, land_start, True, True)
+    tick(mission, land_start, 42.1, land_start, True, True)
     for index in range(1, 18):
         now = land_start + index * .1
-        mission.step(now, 42.1, now, True, True)
+        tick(mission, now, 42.1, now, True, True)
     assert mission.phase == Phase.DISARMING
-    mission.step(now + .1, 42.1, now + .1, False, True)
+    tick(mission, now + .1, 42.1, now + .1, False, True)
     assert mission.phase == Phase.DISARMED
     with pytest.raises(ValueError, match='one attempt'):
         mission.request('arm', 126, automatic=True)
@@ -59,37 +60,37 @@ def test_auto_runs_without_view_and_stops_after_one_flight():
 
 def test_manual_approval_uses_profile_height_and_accepts_land():
     mission = FlightMission('manual')
-    mission.step(100, 42, 100, False, True)
-    mission.step(112, 42, 112, False, True)
+    tick(mission, 100, 42, 100, False, True)
+    tick(mission, 112, 42, 112, False, True)
     with pytest.raises(ValueError, match='mission profile'):
         mission.request('height', 112.1, height_m=100)
     assert mission.height_m == 20
     mission.request('arm', 112.2)
-    mission.step(112.3, 42, 112.3, True, True)
+    tick(mission, 112.3, 42, 112.3, True, True)
     mission.request('start', 112.4, 42)
-    mission.step(113, 62, 113, True, True)
-    mission.step(113.1, 62, 113.1, True, True)
+    tick(mission, 113, 62, 113, True, True)
+    tick(mission, 113.1, 62, 113.1, True, True)
     for now in (113.3, 113.5, 113.7):
-        mission.step(now, 62, now, True, True)
+        tick(mission, now, 62, now, True, True)
     assert mission.phase == Phase.HOVER
-    mission.step(120, 62, 120, True, True)
+    tick(mission, 120, 62, 120, True, True)
     assert mission.phase == Phase.TAKEOFF  # long sample gap invalidates hover speed
     mission.request('land', 120.1)
     assert mission.phase == Phase.LAND
-    mission.step(120.2, 61, 120.2, True, False)
+    tick(mission, 120.2, 61, 120.2, True, False)
     assert mission.phase == Phase.LAND
 
 
 def test_view_loss_lands_or_disarms_and_fault_blocks_restart():
     mission = ready()
-    mission.step(113, 43, 113, True, False)
+    tick(mission, 113, 43, 113, True, False)
     assert mission.phase == Phase.LAND
     other = FlightMission('manual')
-    other.step(100, 0, 100, False, True)
-    other.step(112, 0, 112, False, True)
+    tick(other, 100, 0, 100, False, True)
+    tick(other, 112, 0, 112, False, True)
     other.request('arm', 112.1)
-    other.step(112.2, 0, 112.2, True, True)
-    other.step(113, 0, 113, True, False)
+    tick(other, 112.2, 0, 112.2, True, True)
+    tick(other, 113, 0, 113, True, False)
     assert other.phase == Phase.DISARMING
     other.fault('telemetry stale', 114)
     with pytest.raises(ValueError, match='fault'):
@@ -155,7 +156,7 @@ def test_view_link_applies_target_height_and_acks_denial():
     link.connection = SimpleNamespace(recv_match=lambda **kwargs: next(iterator),
         mav=SimpleNamespace(command_ack_send=lambda *args: acks.append(args),
                             statustext_send=lambda *args: None))
-    link.poll(mission, 1.1, 0.)
+    link.poll(mission, context(mission, 1.1, 0., 1.1))
     assert (mission.height_m, mission.hover_duration_s) == (12.5, 5.)
     assert [ack[:2] for ack in acks] == [(31012, mavutil.mavlink.MAV_RESULT_ACCEPTED),
                                          (31012, mavutil.mavlink.MAV_RESULT_DENIED)]
@@ -181,15 +182,15 @@ def test_view_link_rejects_wrong_source_and_acks_commands():
             return self.source[1]
 
     mission = FlightMission('manual')
-    mission.step(100, 0, 100, False, True)
-    mission.step(112, 0, 112, False, True)
+    tick(mission, 100, 0, 100, False, True)
+    tick(mission, 112, 0, 112, False, True)
     messages = iter((Message('COMMAND_LONG', (2, 2)), Message('HEARTBEAT'),
                      Message('COMMAND_LONG'), None))
     acks = []
     link = ViewLink()
     link.connection = SimpleNamespace(recv_match=lambda **kwargs: next(messages),
                                       mav=SimpleNamespace(command_ack_send=lambda *args: acks.append(args)))
-    link.poll(mission, 112.1, 0)
+    link.poll(mission, context(mission, 112.1, 0., 112.1))
     assert mission.phase == Phase.ARMING
     assert acks == [(400, 0, 0, 1, 255, 190)]
 
@@ -202,16 +203,19 @@ def test_view_link_uses_one_udp_socket_for_stream_command_and_ack():
     try:
         port = view.port.getsockname()[1]
         mission = FlightMission('manual')
-        mission.step(100, 0, 100, False, True)
-        mission.step(112, 0, 112, False, True)
+        tick(mission, 100, 0, 100, False, True)
+        tick(mission, 112, 0, 112, False, True)
         sample = SimpleNamespace(heartbeat=None, heartbeat_at=0, attitude=None, vfr_hud=None)
         with ViewLink(endpoint=f'udpout:127.0.0.1:{port}') as link:
-            link.publish(mission, sample, 112.1, False)
+            mission.blackboard.telemetry = sample
+            link.publish(mission, context(mission, 112.1))
             heartbeat = view.recv_match(type='HEARTBEAT', blocking=True, timeout=1)
             assert heartbeat is not None and heartbeat.get_srcSystem() == 1
             assert heartbeat.custom_mode == 0
             link.sitl_confirmed = True
-            link.publish(mission, sample, 113.2, True)
+            sample.heartbeat = SimpleNamespace(base_mode=mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+            sample.heartbeat_at = 113.2
+            link.publish(mission, context(mission, 113.2))
             confirmed = view.recv_match(type='HEARTBEAT', blocking=True, timeout=1)
             assert confirmed.custom_mode == SITL_CONFIRMED_CUSTOM_MODE
             assert confirmed.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED
@@ -220,7 +224,7 @@ def test_view_link_uses_one_udp_socket_for_stream_command_and_ack():
                                     mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0,
                                     mavutil.mavlink.MAV_STATE_ACTIVE, 3)
             view.mav.command_long_send(1, 1, 400, 0, 1, 0, 0, 0, 0, 0, 0)
-            link.poll(mission, 112.2, 0)
+            link.poll(mission, context(mission, 112.2, 0., 112.2))
             ack = view.recv_match(type='COMMAND_ACK', blocking=True, timeout=1)
             assert ack is not None and ack.result == mavutil.mavlink.MAV_RESULT_ACCEPTED
             assert ack.command == 400 and ack.result_param2 == 1
@@ -239,7 +243,8 @@ def test_mavlink_status_names_fit_wire_limit_and_denied_start_reports_reason():
     link.last_phase = mission.phase
     sample = SimpleNamespace(heartbeat=None, heartbeat_at=0, attitude=None, vfr_hud=None,
                              attitude_hz=49., vfr_hud_hz=48.)
-    link.publish(mission, sample, 1., False)
+    mission.blackboard.telemetry = sample
+    link.publish(mission, context(mission, 1.))
     assert all(len(name) <= 10 for name, _ in sent)
     assert (b'APP_MSN', 1.) in sent and (b'VIS_READY', 1.) in sent
     assert (b'HOVER_S', mission.hover_duration_s) in sent
@@ -263,7 +268,7 @@ def test_mavlink_status_names_fit_wire_limit_and_denied_start_reports_reason():
         command_ack_send=lambda *args: acks.append(args),
         statustext_send=lambda *args: statuses.append(args)))
     link.last_view_at = 1.
-    link.poll(target, 1.1, 10.)
+    link.poll(target, context(target, 1.1, 10., 1.1))
     assert acks[0][1] == mavutil.mavlink.MAV_RESULT_DENIED
     assert target.phase == Phase.DISARMED
     assert b'TIMESYNC' in statuses[0][1]
@@ -290,14 +295,14 @@ def test_hover_profile_and_startup_selection(tmp_path):
 
 def test_auto_start_waits_for_ready_state_and_exits_after_disarm():
     mission = FlightMission('auto')
-    _advance_automatic_start(mission, 1., 0.)
+    _advance_automatic_start(mission, context(mission, 1., 0., 1.))
     assert mission.phase == Phase.PREARM
-    mission.step(1., 0., 1., False, False)
-    mission.step(13., 0., 13., False, False)
-    _advance_automatic_start(mission, 13., 0.)
+    tick(mission, 1., 0., 1., False, False)
+    tick(mission, 13., 0., 13., False, False)
+    _advance_automatic_start(mission, context(mission, 13., 0., 13.))
     assert mission.phase == Phase.ARMING
-    mission.step(13.1, 0., 13.1, True, False)
-    _advance_automatic_start(mission, 13.1, 0.)
+    tick(mission, 13.1, 0., 13.1, True, False)
+    _advance_automatic_start(mission, context(mission, 13.1, 0., 13.1, armed=True))
     assert mission.phase == Phase.TAKEOFF and mission.started
     assert _automatic_result(mission, True) is None
     mission.phase = Phase.DISARMED

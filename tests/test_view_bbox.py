@@ -17,6 +17,8 @@ def test_app_forwards_accepted_fid_and_no_target():
                   drone_id='drone_1', bbox={'x': 1, 'y': 2, 'width': 3, 'height': 4})
     mission = TargetMission(DEFAULT_TARGET_PROFILE)
     assert mission.observe_bbox(packet, now)
+    assert mission.blackboard.visual.bbox['capture_ns'] == packet['capture_ns']
+    assert mission.blackboard.visual.bbox is not packet
     link.publish_bbox(packet)
     assert calls[0][:4] == (0, 255, 190, MESSAGE_TYPE)
     assert decode_bbox(calls[0][4]) == {'fid': 123, 'bbox': packet['bbox']}
@@ -26,6 +28,7 @@ def test_app_forwards_accepted_fid_and_no_target():
     assert decode_bbox(calls[1][4]) == {'fid': 124, 'bbox': None}
     packet['fid'] = -1
     assert not mission.observe_bbox(packet, now)
+    assert mission.blackboard.visual.bbox['fid'] == 124
 
 
 def test_app_extension_serializes_with_real_pymavlink():

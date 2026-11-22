@@ -6,6 +6,7 @@ import pytest
 from loguru import logger
 
 from bullet_app.missions import Command, Phase
+from bullet_app.blackboard import Blackboard, StepContext
 from bullet_app.run_logging import configure_logging
 from bullet_app.tracking_log import TrackingLog
 from los_tracking.types import ControlDemand, Diagnostics, NavigationResult, State, TrackStage
@@ -49,21 +50,23 @@ def test_tracking_checkpoints_and_events_are_bounded():
     try:
         packet = {'capture_ns': 1_000_000_000, 'bbox': {'x': 300, 'y': 220, 'width': 40, 'height': 40}}
         mission = SimpleNamespace(
-            phase=Phase.SEARCH, bbox=packet, contact=False, result=None,
-            ground_altitude_m=0., config=SimpleNamespace(camera=SimpleNamespace(cx_px=320.)),
-            last_navigation_result=None)
-        mission._visual_box = lambda now: mission.bbox['bbox'] if mission.bbox and now - mission.bbox['capture_ns'] / 1e9 <= .2 else None
-        sample = SimpleNamespace(attitude=SimpleNamespace(yaw=.25))
+            phase=Phase.SEARCH, result=None, ground_altitude_m=0.,
+            config=SimpleNamespace(camera=SimpleNamespace(cx_px=320.)))
+        board = Blackboard()
+        board.visual.bbox = packet
+        mission._visual_box = lambda now: (board.visual.bbox['bbox'] if board.visual.bbox
+                                            and now - board.visual.bbox['capture_ns'] / 1e9 <= .2 else None)
+        board.telemetry = SimpleNamespace(attitude=SimpleNamespace(yaw=.25), vfr_hud=SimpleNamespace(alt=10.))
         trace = TrackingLog()
         command = Command(1500, True, yaw=1550)
-        trace.observe(mission, sample, command, 10., 1.)
-        trace.observe(mission, sample, command, 10., 1.1)
-        mission.bbox = {'capture_ns': 1_210_000_000, 'bbox': None}
-        trace.observe(mission, sample, command, 10., 1.21)
-        mission.contact = True
+        trace.observe(mission, StepContext(board, 1.), command)
+        trace.observe(mission, StepContext(board, 1.1), command)
+        board.visual.bbox = {'capture_ns': 1_210_000_000, 'bbox': None}
+        trace.observe(mission, StepContext(board, 1.21), command)
+        board.visual.contact = True
         mission.result = 'target not found'
-        trace.observe(mission, sample, command, 10., 1.42)
-        trace.observe(mission, sample, command, 10., 1.43)
+        trace.observe(mission, StepContext(board, 1.42), command)
+        trace.observe(mission, StepContext(board, 1.43), command)
         checkpoints = [line for line in messages if 'TRACK checkpoint' in line]
         assert len(checkpoints) == 3
         assert 'bbox_error_x_px=0.0' in checkpoints[0]
@@ -83,24 +86,25 @@ def test_los_stage_and_processed_guidance_are_logged():
     try:
         box = {'x': 300, 'y': 220, 'width': 40, 'height': 40}
         mission = SimpleNamespace(
-            phase=Phase.LOS, bbox={'capture_ns': 2_000_000_000, 'bbox': box},
-            contact=False, result=None, ground_altitude_m=0.,
+            phase=Phase.LOS, result=None, ground_altitude_m=0.,
             config=SimpleNamespace(camera=SimpleNamespace(cx_px=320.)))
-        mission._visual_box = lambda now: mission.bbox['bbox']
+        board = Blackboard()
+        board.visual.bbox = {'capture_ns': 2_000_000_000, 'bbox': box}
+        mission._visual_box = lambda now: board.visual.bbox['bbox']
         diagnostics = Diagnostics(processed_image_sequence=7,
                                   processed_bbox=(300., 220., 40., 40.),
                                   azimuth_rad=.2, optical_ttc_s=3., vision_reason='usable')
         demand = ControlDemand(.1, .2, .3, 5.)
-        mission.last_navigation_result = NavigationResult(1, 2., 2.5, State.TRACK,
-                                                          TrackStage.BEARING, 'tracking', demand, diagnostics)
+        board.features.navigation_result = NavigationResult(1, 2., 2.5, State.TRACK,
+                                                            TrackStage.BEARING, 'tracking', demand, diagnostics)
         trace = TrackingLog()
-        sample = SimpleNamespace(attitude=SimpleNamespace(yaw=.4))
+        board.telemetry = SimpleNamespace(attitude=SimpleNamespace(yaw=.4), vfr_hud=SimpleNamespace(alt=9.))
         command = Command(1540, True, roll=1510, pitch=1520, yaw=1530)
-        trace.observe(mission, sample, command, 9., 2.)
-        trace.observe(mission, sample, command, 9., 2.1)
-        mission.last_navigation_result = NavigationResult(2, 2.21, 2.7, State.TRACK,
-                                                          TrackStage.TTC, 'tracking', demand, diagnostics)
-        trace.observe(mission, sample, command, 9., 2.21)
+        trace.observe(mission, StepContext(board, 2.), command)
+        trace.observe(mission, StepContext(board, 2.1), command)
+        board.features.navigation_result = NavigationResult(2, 2.21, 2.7, State.TRACK,
+                                                            TrackStage.TTC, 'tracking', demand, diagnostics)
+        trace.observe(mission, StepContext(board, 2.21), command)
         assert sum('LOS stage=bearing' in line for line in messages) == 1
         assert sum('LOS stage=ttc' in line for line in messages) == 1
         checkpoints = [line for line in messages if 'TRACK checkpoint' in line]

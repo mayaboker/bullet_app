@@ -48,3 +48,7 @@
 | [0044 Mission control loop diagram](0044-mission-control-loop-diagram.md) | Explain App components and its 50 Hz loop with Mermaid diagrams. | Implemented; links and source checked | Pending |
 | [0045 Hover-land mission guide](0045-hover-land-mission-guide.md) | Explain the implemented hover-land mission, control thresholds, and operator behavior. | Implemented; links and source checked | Pending |
 | [0046 Transitions mission state machine](0046-transitions-mission-state-machine.md) | Move shared and target mission phases into an ordered transitions machine. | Implemented; 42 tests passed | Pending |
+| [0047 Mission blackboard and step context](0047-mission-blackboard-context.md) | Share current MAVLink, visual, and target feature data through a singleton board and step context. | Implemented; 45 tests passed | Pending |
+| [0048 Target-hit mission guide](0048-target-hit-mission-guide.md) | Explain target-hit setup, phase transitions, LOS inputs, contact, and failure behavior. | Implemented; links and source checked | Pending |
+| [0049 Shared mission base](0049-shared-mission-base.md) | Keep the base mission limited to shared flight behavior and move target-only methods to concrete missions. | Implemented; 51 tests passed | Pending (no commit requested) |
+| [0050 Local readiness enum](0050-local-readiness-enum.md) | Name App readiness values while preserving numeric MAVLink status and avoiding a shared Python flight contract. | Implemented; 52 App and 90 View tests passed | Pending (no commit requested) |

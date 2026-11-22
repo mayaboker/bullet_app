@@ -6,5 +6,5 @@ from .missions.hover_land import DEFAULT_PROFILE, HoverLandMission, HoverLandSet
 class FlightMission(HoverLandMission):
     """Legacy import path for the configured hover/land mission."""
 
-    def __init__(self, mode='manual'):
-        super().__init__(HoverLandSettings.from_yaml(DEFAULT_PROFILE), mode)
+    def __init__(self, mode='manual', blackboard=None):
+        super().__init__(HoverLandSettings.from_yaml(DEFAULT_PROFILE), mode, blackboard)

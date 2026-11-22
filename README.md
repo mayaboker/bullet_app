@@ -6,13 +6,21 @@ uses `beta_client` to read Betaflight MAVLink on TCP 5762 and send MSP RC on TCP
 5761. App streams MAVLink to View on loopback UDP 14550; View returns its
 heartbeat and flight commands on the same connection, and App replies with
 command ACKs. The app does not import the simulator or renderer.
+App–View flight readiness is carried as a numeric MAVLink `MIS_READY` value;
+App defines its readiness enum locally and does not share Python flight-control
+types with View.
 
 See the [mission control loop diagram](docs/mission-control-loop.md) for the
 components, data paths, mission phases, and each 20 ms control tick.
 See the [hover-land mission guide](docs/hover-land-mission.md) for its profile,
 phase transitions, altitude control, operator actions, and failure behavior.
+See the [target-hit mission guide](docs/target-hit-mission.md) for visual inputs,
+search and LOS phases, contact confirmation, and failure handling.
 Both missions use an ordered `transitions` state machine for phase changes;
 the altitude controller and target guidance supply its flight decisions.
+One process-wide blackboard holds the latest MAVLink, accepted target observations,
+and target navigation outputs. Each mission control tick receives that board and
+its monotonic timestamp through `StepContext`.
 
 At startup, App requests `MSP_BOARD_INFO` on the MSP connection. It confirms
 Betaflight SITL when the board identifier is `SITL`, and reports the result in

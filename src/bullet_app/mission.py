@@ -15,6 +15,7 @@ from .view_link import ViewLink
 from .ingress import TargetIngress
 from .rate_monitor import RateMonitor
 from .tracking_log import TrackingLog
+from .blackboard import Blackboard, StepContext
 
 CONTROL_CENTER = 1500
 AUX_LOW = 1000
@@ -36,15 +37,16 @@ def _send_command(transport: TcpTransport, command: Command) -> None:
     transport.drain_responses()
 
 
-def _advance_automatic_start(mission, now: float, altitude: float) -> None:
+def _advance_automatic_start(mission, context: StepContext) -> None:
     if mission.started:
         return
+    now = context.now_s
     if mission.mission_kind == 'target-hit' and not mission.sync_ready(now):
         return
     if mission.phase == Phase.DISARMED:
         mission.request('arm', now, automatic=True)
     elif mission.phase == Phase.ARMED:
-        mission.request('start', now, altitude, automatic=True)
+        mission.request('start', now, context.altitude_m, automatic=True)
 
 
 def _automatic_result(mission, firmware_armed: bool) -> int | None:
@@ -59,7 +61,9 @@ def _automatic_result(mission, firmware_armed: bool) -> int | None:
 
 def run_mission(options) -> int:
     """Run one auto flight or serve repeated View-approved flights."""
-    mission = create_mission(options)
+    blackboard = Blackboard()
+    blackboard.reset()
+    mission = create_mission(options, blackboard)
     tracking_log = TrackingLog() if mission.mission_kind == 'target-hit' else None
     with ExitStack() as resources:
         telemetry = resources.enter_context(MavlinkTelemetry(options.mavlink_endpoint))
@@ -94,19 +98,20 @@ def run_mission(options) -> int:
             rates = RateMonitor(connected_at)
             while True:
                 sample = telemetry.snapshot()
+                blackboard.telemetry = sample
                 now = time.monotonic()
-                altitude = sample.vfr_hud.alt if sample.vfr_hud is not None else None
+                context = StepContext(blackboard, now)
+                altitude = context.altitude_m
                 if ingress is not None:
-                    mission.observe_timesync(sample.timesync, now)
+                    mission.observe_timesync(blackboard.telemetry.timesync, now)
                     bboxes, contact = ingress.poll()
                     for bbox in bboxes:
                         if mission.observe_bbox(bbox, now):
-                            view.publish_bbox(bbox)
+                            view.publish_bbox(blackboard.visual.bbox)
                     mission.observe_contact(contact)
-                    mission.sample = sample
-                view.poll(mission, now, altitude)
-                firmware_armed = bool(sample.heartbeat is not None and
-                                      sample.heartbeat.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+                view.poll(mission, context)
+                blackboard.view_alive = view.view_alive(now)
+                firmware_armed = context.firmware_armed
                 heartbeat_fresh = sample.heartbeat is not None and now - sample.heartbeat_at <= HEARTBEAT_STALE_S
                 altitude_fresh = (altitude is not None and sample.vfr_hud_at > 0
                                   and now - sample.vfr_hud_at <= ALTITUDE_STALE_S)
@@ -115,10 +120,9 @@ def run_mission(options) -> int:
                         mission.fault('SITL telemetry stale', now)
                 if mission.phase != Phase.FAULT and heartbeat_fresh and altitude_fresh:
                     try:
-                        command = mission.step(now, altitude, sample.vfr_hud_at,
-                                               firmware_armed, view.view_alive(now))
+                        command = mission.step(context)
                         if options.mode == 'auto':
-                            _advance_automatic_start(mission, now, altitude)
+                            _advance_automatic_start(mission, context)
                     except ValueError as error:
                         mission.fault(str(error), now)
                         command = Command(THROTTLE_MIN, False)
@@ -126,8 +130,8 @@ def run_mission(options) -> int:
                     command = Command(THROTTLE_MIN, False)
                 _send_command(transport, command)
                 if tracking_log is not None:
-                    tracking_log.observe(mission, sample, command, altitude, now)
-                view.publish(mission, sample, now, firmware_armed if heartbeat_fresh else False)
+                    tracking_log.observe(mission, context, command)
+                view.publish(mission, context)
                 for name, event, hz in rates.check(now, sample.attitude_hz, sample.vfr_hud_hz):
                     if event == 'low':
                         logger.warning('{} rate low: {:.1f} Hz', name, hz)
@@ -148,7 +152,7 @@ def run_mission(options) -> int:
                     if sync_ready != previous_sync_ready:
                         logger.info('MAVLink TIMESYNC {}', 'ready' if sync_ready else 'lost')
                         previous_sync_ready = sync_ready
-                navigation = getattr(mission, 'last_navigation_result', None)
+                navigation = blackboard.features.navigation_result
                 if navigation is not None:
                     current_navigation = (navigation.state, navigation.reason)
                     if current_navigation != previous_navigation:
@@ -197,7 +201,7 @@ def run_mission(options) -> int:
                                     None if sync is None else round(sync.rtt_ns / 1e6, 2),
                                     None if sync is None else round(now - sync.updated_at, 3),
                                     None if sync is None else round(sync.offset_ns / 1e9, 6))
-                    navigation_input = getattr(mission, 'last_navigation_input', None)
+                    navigation_input = blackboard.features.navigation_input
                     if mission.phase in (Phase.LOS, Phase.COMMIT) and navigation is not None and navigation_input is not None:
                         target, attitude = navigation_input.target, navigation_input.attitude
                         counts = (navigation.diagnostics.alignment_waits,

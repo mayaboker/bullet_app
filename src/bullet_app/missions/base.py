@@ -1,10 +1,11 @@
 """Shared SITL flight lifecycle for startup-selected missions."""
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, IntEnum
 from math import isfinite
 from transitions import Machine
 
 from ..altitude_control import AltitudeControl
+from ..blackboard import Blackboard, StepContext
 
 MIN_HEIGHT_M = 0.1
 MAX_HEIGHT_M = 100.0
@@ -40,10 +41,18 @@ class Phase(str, Enum):
     COMMIT = 'commit'
 
 
+class Readiness(IntEnum):
+    """Numeric mission readiness carried in MAVLink MIS_READY."""
+
+    UNAVAILABLE = 0
+    DISARMED_IDLE = 1
+    ARMED_IDLE = 2
+    FLYING = 3
+    RESET_REQUIRED = 4
+
+
 PHASE_IDS = {phase: index for index, phase in enumerate(Phase)}
-AIRBORNE_PHASES = frozenset((Phase.TAKEOFF, Phase.HOVER, Phase.LAND, Phase.SEARCH,
-                            Phase.CENTER, Phase.SETTLE, Phase.LOS, Phase.COMMIT))
-TARGET_PHASES = frozenset((Phase.SEARCH, Phase.CENTER, Phase.SETTLE, Phase.LOS, Phase.COMMIT))
+AIRBORNE_PHASES = frozenset((Phase.TAKEOFF, Phase.HOVER, Phase.LAND))
 SHARED_PHASE_EDGES = (
     (Phase.PREARM, Phase.DISARMED),
     (Phase.DISARMED, Phase.ARMING),
@@ -53,17 +62,6 @@ SHARED_PHASE_EDGES = (
     (Phase.HOVER, Phase.TAKEOFF),
     (Phase.LAND, Phase.DISARMING),
     (Phase.DISARMING, Phase.DISARMED),
-)
-TARGET_PHASE_EDGES = (
-    (Phase.HOVER, Phase.SEARCH),
-    (Phase.SEARCH, Phase.CENTER),
-    (Phase.SEARCH, Phase.SETTLE),
-    (Phase.CENTER, Phase.SEARCH),
-    (Phase.CENTER, Phase.SETTLE),
-    (Phase.SETTLE, Phase.SEARCH),
-    (Phase.SETTLE, Phase.CENTER),
-    (Phase.SETTLE, Phase.LOS),
-    (Phase.LOS, Phase.COMMIT),
 )
 
 
@@ -79,10 +77,13 @@ class Command:
 class MissionBase:
     """Share arm, climb, hover, landing, and disarm transitions."""
 
-    def __init__(self, mode: str, mission_kind: str, height_m: float, hover_duration_s: float):
+    def __init__(self, mode: str, mission_kind: str, height_m: float, hover_duration_s: float,
+                 blackboard: Blackboard | None = None):
+        """Initialize mission timing, control state, and its permitted phase graph."""
         if mode not in ('auto', 'manual'):
             raise ValueError('mode must be auto or manual')
         self.mode = mode
+        self.blackboard = blackboard if blackboard is not None else Blackboard()
         self.phase = Phase.PREARM
         self.entered_at: float | None = None
         self.ground_altitude_m: float | None = None
@@ -96,6 +97,7 @@ class MissionBase:
         self.mission_kind = mission_kind
         self.result: str | None = None
         self.started = False
+        self.airborne_phases = AIRBORNE_PHASES
         self._requested_phase: Phase | None = None
         self.machine = Machine(model=self, states=list(Phase), initial=Phase.PREARM,
                                model_attribute='phase', auto_transitions=False,
@@ -109,25 +111,21 @@ class MissionBase:
             self._add_transition(source, Phase.DISARMING)
         for source in (Phase.TAKEOFF, Phase.HOVER):
             self._add_transition(source, Phase.LAND)
-        if mission_kind == 'target-hit':
-            for source in TARGET_PHASES:
-                self._add_transition(source, Phase.LAND)
-                self._add_transition(source, Phase.DISARMING)
         for source, destination in SHARED_PHASE_EDGES:
             self._add_transition(source, destination)
-        if mission_kind == 'target-hit':
-            for source, destination in TARGET_PHASE_EDGES:
-                self._add_transition(source, destination)
 
     def _add_transition(self, source: Phase, destination: Phase) -> None:
+        """Register a legal phase edge for the machine's resolve trigger."""
         self.machine.add_transition('resolve', source, destination,
                                     conditions=self._wants_phase(destination))
 
     @staticmethod
     def _wants_phase(destination: Phase):
+        """Build a guard that matches the destination requested by the mission."""
         return lambda event: event.model._requested_phase == destination
 
     def _enter(self, phase: Phase, now: float) -> None:
+        """Resolve a phase change now, rejecting edges absent from the graph."""
         if phase == self.phase:
             return
         self._requested_phase = phase
@@ -138,6 +136,7 @@ class MissionBase:
             self._requested_phase = None
 
     def _on_phase_changed(self, event) -> None:
+        """Record phase entry and reset control or dwell state when required."""
         previous = Phase[event.transition.source]
         self.entered_at = event.kwargs['now']
         if self.phase == Phase.LAND or (self.phase == Phase.TAKEOFF and previous != Phase.HOVER):
@@ -149,26 +148,30 @@ class MissionBase:
             self.landing_dwell_at = None
 
     @property
-    def readiness(self) -> int:
+    def readiness(self) -> Readiness:
+        """Return the View protocol's readiness code for the current phase."""
         if self.phase == Phase.DISARMED:
-            return 1
+            return Readiness.DISARMED_IDLE
         if self.phase == Phase.ARMED:
-            return 2
-        if self.phase in AIRBORNE_PHASES:
-            return 3
+            return Readiness.ARMED_IDLE
+        if self.phase in self.airborne_phases:
+            return Readiness.FLYING
         if self.phase == Phase.FAULT:
-            return 4
-        return 0
+            return Readiness.RESET_REQUIRED
+        return Readiness.UNAVAILABLE
 
     def fault(self, reason: str, now: float) -> None:
+        """Record the failure reason and enter the disarmed-command fault phase."""
         self.fault_reason = reason
         self._enter(Phase.FAULT, now)
 
-    def request_height(self, height_m: float) -> None:
-        raise ValueError('Height is fixed by the mission profile')
-
     def request(self, action: str, now: float, altitude_m: float | None = None,
                 height_m: float | None = None, *, automatic: bool = False) -> None:
+        """Apply an operator or automatic action after mode and phase checks.
+
+        Accepted actions change phase synchronously; Start saves the measured
+        altitude as the launch datum. Invalid requests raise ``ValueError``.
+        """
         if self.phase == Phase.FAULT:
             raise ValueError('App fault; restart required')
         if self.mode == 'auto' and self.started and action in ('arm', 'start'):
@@ -190,8 +193,7 @@ class MissionBase:
             self.started = True
             self._enter(Phase.TAKEOFF, now)
         elif action == 'land':
-            if self.phase not in (Phase.TAKEOFF, Phase.HOVER, Phase.SEARCH, Phase.CENTER,
-                                  Phase.SETTLE, Phase.LOS, Phase.COMMIT):
+            if self.phase not in self.airborne_phases - {Phase.LAND}:
                 raise ValueError('Active flight required to land')
             self._enter(Phase.LAND, now)
         elif action == 'disarm':
@@ -204,38 +206,45 @@ class MissionBase:
         else:
             raise ValueError('Unsupported flight action')
 
-    def step(self, now: float, altitude_m: float, altitude_at: float,
-             firmware_armed: bool, view_alive: bool) -> Command:
+    def step(self, context: StepContext) -> Command:
         """Advance one control tick using fresh MAVLink altitude and arm feedback.
 
         Resolve any permitted phase change, then return the RC command for the
-        resulting phase. ``now`` and ``altitude_at`` use monotonic seconds;
-        ``altitude_m`` is the measured altitude, not height above launch.
-        ``view_alive`` gates manual flight only. Invalid altitude raises
+        resulting phase. ``context.now_s`` and the MAVLink receive times use
+        monotonic seconds; altitude is measured, not height above launch.
+        View liveness gates manual flight only. Invalid altitude raises
         ``ValueError`` before the phase or controller is updated.
         """
+        if context.blackboard is not self.blackboard:
+            raise ValueError('Mission step uses a different blackboard')
+        now = context.now_s
+        altitude_m = context.altitude_m
+        altitude_at = context.altitude_at_s
         self._validate_altitude(now, altitude_m, altitude_at)
         if self.entered_at is None:
             self.entered_at = now
-        self._handle_view_loss(now, view_alive)
-        self._advance_phase(now, altitude_m, altitude_at, firmware_armed)
+        self._handle_view_loss(now, context.view_alive)
+        self._advance_phase(now, altitude_m, altitude_at, context.firmware_armed)
         return self._flight_command()
 
     @staticmethod
     def _validate_altitude(now: float, altitude_m: float, altitude_at: float) -> None:
-        if not isfinite(altitude_m) or altitude_at <= 0 or altitude_at > now or now - altitude_at > 1.0:
+        """Require a finite altitude received within the last monotonic second."""
+        if altitude_m is None or not isfinite(altitude_m) or altitude_at <= 0 or altitude_at > now or now - altitude_at > 1.0:
             raise ValueError('Fresh finite MAVLink altitude required')
 
     def _handle_view_loss(self, now: float, view_alive: bool) -> None:
+        """Disarm idle or land airborne manual flight when View is absent."""
         if self.mode != 'manual' or view_alive:
             return
         if self.phase in (Phase.ARMING, Phase.ARMED):
             self._enter(Phase.DISARMING, now)
-        elif self.phase in AIRBORNE_PHASES - {Phase.LAND}:
+        elif self.phase in self.airborne_phases - {Phase.LAND}:
             self._enter(Phase.LAND, now)
 
     def _advance_phase(self, now: float, altitude_m: float, altitude_at: float,
                        firmware_armed: bool) -> None:
+        """Advance the current phase from arm feedback, timers, and altitude."""
         elapsed = now - self.entered_at
         if self.phase == Phase.PREARM:
             if firmware_armed:
@@ -264,6 +273,7 @@ class MissionBase:
 
     def _advance_altitude_phase(self, now: float, altitude_m: float, altitude_at: float,
                                 firmware_armed: bool, elapsed: float) -> None:
+        """Update airborne altitude control and takeoff, hover, or land state."""
         if not firmware_armed:
             self.fault('Vehicle unexpectedly disarmed', now)
             return
@@ -280,6 +290,7 @@ class MissionBase:
         self._check_phase_timeout(now)
 
     def _update_altitude_control(self, altitude_m: float, altitude_at: float) -> None:
+        """Recompute throttle only for a newer altitude sample."""
         if altitude_at <= self.last_altitude_at:
             return
         landing = self.phase == Phase.LAND
@@ -290,12 +301,14 @@ class MissionBase:
         self.last_altitude_at = altitude_at
 
     def _near_hover(self, altitude_m: float) -> bool:
+        """Check the height band and filtered vertical-speed hover limits."""
         hover_band = min(0.5, max(0.03, self.height_m * 0.25))
         return (self.controller.speed_ready
                 and abs(altitude_m - (self.ground_altitude_m + self.height_m)) <= hover_band
                 and abs(self.controller.speed) <= HOVER_SPEED_M_S)
 
     def _advance_takeoff(self, now: float, altitude_m: float) -> None:
+        """Enter hover after the vehicle remains near target height for 0.5 s."""
         if not self._near_hover(altitude_m):
             self.near_hover_at = None
         elif self.near_hover_at is None:
@@ -304,6 +317,7 @@ class MissionBase:
             self._enter(Phase.HOVER, now)
 
     def _advance_landing(self, now: float, altitude_m: float) -> None:
+        """Begin disarming after one second near the launch altitude."""
         landed = (self.controller.speed_ready
                   and abs(altitude_m - self.ground_altitude_m) <= LANDING_HEIGHT_M
                   and abs(self.controller.speed) <= LANDING_SPEED_M_S)
@@ -315,6 +329,7 @@ class MissionBase:
             self._enter(Phase.DISARMING, now)
 
     def _check_phase_timeout(self, now: float) -> None:
+        """Fault a takeoff or landing that exceeds its height-scaled limit."""
         if self.phase == Phase.TAKEOFF:
             limit = max(MIN_PHASE_TIMEOUT_S, PHASE_TIMEOUT_MARGIN_S
                         + self.height_m / CLIMB_TIMEOUT_SPEED_M_S)
@@ -327,12 +342,11 @@ class MissionBase:
             self.fault(f'{self.phase.value} timed out', now)
 
     def _flight_command(self) -> Command:
-        if self.phase in AIRBORNE_PHASES:
+        """Map the resulting phase and controller throttle to an RC command."""
+        if self.phase in self.airborne_phases:
             return Command(self.controller.throttle, True)
         return Command(1000, self.phase in (Phase.ARMING, Phase.ARMED))
 
     def _on_hover_complete(self, now: float) -> None:
+        """Let the selected mission choose its phase after timed hover."""
         raise NotImplementedError
-
-    def vision_alive(self, now: float) -> bool:
-        return True

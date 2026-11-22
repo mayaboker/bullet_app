@@ -7,7 +7,9 @@ from pymavlink.dialects.v20 import common
 from loguru import logger
 from bullet_simulation_protocol.view_bbox import MAX_PAYLOAD_BYTES, MESSAGE_TYPE, encode_bbox
 
-from .missions import MissionBase, PHASE_IDS, Phase
+from .missions import HoverLandMission, TargetMission, PHASE_IDS, Phase
+from .missions.base import Readiness
+from .blackboard import StepContext
 
 APP_SYSTEM_ID = 1
 APP_COMPONENT_ID = 1
@@ -103,7 +105,8 @@ class ViewLink:
         severity = 4 if event == 'low' else 6
         self.connection.mav.statustext_send(severity, description.encode('ascii')[:50])
 
-    def poll(self, mission: MissionBase, now: float, altitude_m: float | None) -> None:
+    def poll(self, mission: HoverLandMission | TargetMission, context: StepContext) -> None:
+        now = context.now_s
         for _ in range(32):
             message = self.connection.recv_match(type=['HEARTBEAT', 'COMMAND_LONG'], blocking=False)
             if message is None:
@@ -123,7 +126,7 @@ class ViewLink:
                 if action == 'height':
                     mission.request_height(value)
                 else:
-                    mission.request(action, now, altitude_m, value)
+                    mission.request(action, now, context.altitude_m, value)
             except ValueError as error:
                 result = mavutil.mavlink.MAV_RESULT_DENIED
                 logger.warning('View command {} denied: {}', action, error)
@@ -133,7 +136,11 @@ class ViewLink:
             self.connection.mav.command_ack_send(message.command, result, 0, ACTION_IDS[action],
                                                  VIEW_SYSTEM_ID, VIEW_COMPONENT_ID)
 
-    def publish(self, mission: MissionBase, sample, now: float, firmware_armed: bool) -> None:
+    def publish(self, mission: HoverLandMission | TargetMission, context: StepContext) -> None:
+        now = context.now_s
+        sample = context.blackboard.telemetry
+        firmware_armed = (context.firmware_armed and sample.heartbeat is not None
+                          and now - sample.heartbeat_at <= 3.0)
         elapsed_ms = int(now * 1000) % 2**32
         elapsed_us = int(now * 1_000_000) % 2**64
         mav = self.connection.mav
@@ -145,7 +152,7 @@ class ViewLink:
             self.last_rate_at = now
         if now - self.last_heartbeat_at >= HEARTBEAT_PERIOD_S:
             mode = mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED if firmware_armed else 0
-            status = (mavutil.mavlink.MAV_STATE_ACTIVE if mission.readiness == 3
+            status = (mavutil.mavlink.MAV_STATE_ACTIVE if mission.readiness == Readiness.FLYING
                       else mavutil.mavlink.MAV_STATE_STANDBY)
             mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_QUADROTOR,
                                mavutil.mavlink.MAV_AUTOPILOT_GENERIC, mode,
@@ -160,7 +167,7 @@ class ViewLink:
                       ('APP_PHASE', float(PHASE_IDS[mission.phase])),
                       ('APP_MSN', float({'hover-land': 1, 'target-hit': 2}[mission.mission_kind])),
                       ('APP_RESULT', 0.0 if mission.result is None else 1.0 if mission.result == 'hit' else 2.0),
-                      ('VIS_READY', float(mission.vision_alive(now) if mission.mission_kind == 'target-hit' else True)))
+                      ('VIS_READY', float(mission.vision_alive(now))))
             for name, value in values:
                 mav.named_value_float_send(elapsed_ms, name.encode('ascii'), value)
             self.last_state_at = now
