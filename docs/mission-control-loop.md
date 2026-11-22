@@ -26,7 +26,7 @@ flowchart LR
         Altitude["AltitudeControl<br/>throttle from fresh altitude"]
         Estimator["TargetSensorEstimator<br/>aligns target and sensors"]
         Navigator["LosNavigator<br/>LOS guidance"]
-        Diagnostics["RateMonitor + TrackingLog<br/>diagnostic output"]
+        Diagnostics["RuntimeDiagnostics + TrackingLog<br/>rate, flight, and target logs"]
     end
 
     Entry --> Runner
@@ -79,7 +79,7 @@ The MAVLink receiver runs in its own thread and updates a thread-safe snapshot. 
 
 In manual mode, View's Arm, Start, Land, and Disarm commands enter through `ViewLink.poll`; manual target missions also accept height changes while idle. View heartbeat loss makes an armed idle mission disarm or an airborne mission land. In auto mode, App requests Arm and Start itself after the shared mission reaches the appropriate phase. A target mission additionally requires fresh TIMESYNC before Arm or Start.
 
-The loop faults if the vehicle heartbeat is older than 3 seconds or altitude remains unavailable after the 10-second startup allowance or later becomes older than 1 second. It then sends a disarmed, minimum-throttle command. `ViewLink.publish` sends App heartbeat, state, fresh attitude and relative altitude, plus status updates at their own rates; these are App-originated MAVLink messages, separate from the incoming Betaflight stream. `RateMonitor` reports sustained telemetry-rate drops. `TrackingLog` records target guidance diagnostics and does not control flight.
+The loop faults if the vehicle heartbeat is older than 3 seconds or altitude remains unavailable after the 10-second startup allowance or later becomes older than 1 second. It then sends a disarmed, minimum-throttle command. `ViewLink.publish` sends App heartbeat, state, fresh attitude and relative altitude, plus status updates at their own rates; these are App-originated MAVLink messages, separate from the incoming Betaflight stream. `RuntimeDiagnostics` owns rate monitoring and periodic flight and LOS logs; `TrackingLog` records target guidance diagnostics. Neither controls flight.
 
 ## Mission paths and shutdown
 

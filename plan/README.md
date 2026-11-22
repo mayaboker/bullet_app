@@ -56,3 +56,5 @@
 | [0052 Mission mode enum](0052-mission-mode-enum.md) | Store approval mode as an App-owned enum while keeping CLI text and MAVLink status values. | Implemented; 54 tests passed | Pending (no commit requested) |
 | [0053 StepContext mission chain](0053-step-context-mission-chain.md) | Pass one StepContext through shared mission tick helpers and hover-completion hooks. | Implemented; 54 tests passed | Pending (no commit requested) |
 | [0054 Rename mission runtime to app](0054-rename-mission-runtime-to-app.md) | Rename the runtime module and update imports and documentation references. | Implemented; 54 tests and CLI help passed | Pending (no commit requested) |
+| [0055 KISS method readability guidance](0055-kiss-method-readability.md) | Guide extraction of cohesive helpers from long orchestration methods without needless abstraction. | Implemented; diff checked | Pending (no commit requested) |
+| [0056 Readable App control loop](0056-readable-app-control-loop.md) | Extract input, safety, and diagnostics responsibilities from the 50 Hz runtime loop. | Implemented; 57 tests passed | Pending (no commit requested) |
