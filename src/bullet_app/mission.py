@@ -10,7 +10,7 @@ from loguru import logger
 from los_tracking.types import State
 from pymavlink import mavutil
 
-from .missions import Command, Phase, create_mission
+from .missions import Action, Command, Mode, Phase, create_mission
 from .view_link import ViewLink
 from .ingress import TargetIngress
 from .rate_monitor import RateMonitor
@@ -44,9 +44,9 @@ def _advance_automatic_start(mission, context: StepContext) -> None:
     if mission.mission_kind == 'target-hit' and not mission.sync_ready(now):
         return
     if mission.phase == Phase.DISARMED:
-        mission.request('arm', now, automatic=True)
+        mission.request(Action.ARM, now, automatic=True)
     elif mission.phase == Phase.ARMED:
-        mission.request('start', now, context.altitude_m, automatic=True)
+        mission.request(Action.START, now, context.altitude_m, automatic=True)
 
 
 def _automatic_result(mission, firmware_armed: bool) -> int | None:
@@ -121,7 +121,7 @@ def run_mission(options) -> int:
                 if mission.phase != Phase.FAULT and heartbeat_fresh and altitude_fresh:
                     try:
                         command = mission.step(context)
-                        if options.mode == 'auto':
+                        if mission.mode == Mode.AUTO:
                             _advance_automatic_start(mission, context)
                     except ValueError as error:
                         mission.fault(str(error), now)
@@ -139,7 +139,7 @@ def run_mission(options) -> int:
                         logger.info('{} rate recovered: {:.1f} Hz', name, hz)
                     view.publish_rate_alert(name, event, hz)
                 if mission.phase != previous_phase:
-                    logger.info('state: {} ({})', mission.phase.value, options.mode)
+                    logger.info('state: {} ({})', mission.phase.value, mission.mode.value)
                     previous_phase = mission.phase
                 if mission.result is not None and mission.result != previous_result:
                     if mission.result == 'hit':
@@ -180,7 +180,7 @@ def run_mission(options) -> int:
                             logger.info('LOS state={} reason={} vision={}', navigation.state.value,
                                         navigation.reason, navigation.diagnostics.vision_reason)
                         previous_navigation = current_navigation
-                if options.mode == 'auto':
+                if mission.mode == Mode.AUTO:
                     outcome = _automatic_result(mission, firmware_armed)
                     if outcome is not None:
                         logger.info('mission finished: {}', 'success' if outcome == 0 else 'failed')

@@ -4,7 +4,7 @@ import pytest
 from beta_client.timesync import TimeSyncStatus
 
 from bullet_app.cli import DEFAULT_TARGET_PROFILE
-from bullet_app.flight import Phase
+from bullet_app.flight import Action, Phase
 from bullet_app.target import TargetMission, _quaternion
 from conftest import tick
 
@@ -30,12 +30,12 @@ def test_target_starts_without_preflight_feed_and_allows_one_attempt():
     tick(mission, 1., 0., 1., False, True)
     tick(mission, 13., 0., 13., False, True)
     _sync(mission, 13.)
-    mission.request('arm', 13.1)
+    mission.request(Action.ARM, 13.1)
     tick(mission, 13.2, 0., 13.2, True, True)
-    mission.request('start', 13.3, 0.)
+    mission.request(Action.START, 13.3, 0.)
     assert mission.phase == Phase.TAKEOFF
     with pytest.raises(ValueError, match='one attempt'):
-        mission.request('start', 14., 0.)
+        mission.request(Action.START, 14., 0.)
 
 
 def test_target_enters_search_after_hover_without_bbox():
@@ -136,7 +136,7 @@ def test_sync_gates_arm_and_faults_after_startup_timeout():
     mission.observe_timesync(None, 1.)
     assert mission.readiness == 0
     with pytest.raises(ValueError, match='TIMESYNC'):
-        mission.request('arm', 1.1)
+        mission.request(Action.ARM, 1.1)
     mission.observe_timesync(None, 6.01)
     assert mission.phase == Phase.FAULT
     assert mission.fault_reason == 'MAVLink TIMESYNC unavailable'

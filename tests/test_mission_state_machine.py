@@ -2,7 +2,7 @@
 import pytest
 
 from bullet_app.cli import DEFAULT_TARGET_PROFILE
-from bullet_app.flight import FlightMission, Phase
+from bullet_app.flight import Action, FlightMission, Phase
 from bullet_app.missions.base import Readiness
 from bullet_app.target import TargetMission
 from conftest import tick
@@ -65,7 +65,7 @@ def test_target_phases_share_flight_safety_and_land_action(phase):
     mission.ground_altitude_m = 0.0
     assert mission.readiness == 3
     assert mission._flight_command().arm
-    mission.request('land', 2.0)
+    mission.request(Action.LAND, 2.0)
     assert mission.phase == Phase.LAND
 
     mission = TargetMission(DEFAULT_TARGET_PROFILE)
@@ -107,7 +107,7 @@ def test_fault_transition_uses_machine_and_blocks_restart():
     assert mission.fault_reason == 'telemetry stale'
     assert mission.entered_at == 2.0
     with pytest.raises(ValueError, match='fault'):
-        mission.request('arm', 3.0)
+        mission.request(Action.ARM, 3.0)
 
 
 def test_prearm_and_arm_timeout_safety_transitions():
@@ -119,7 +119,7 @@ def test_prearm_and_arm_timeout_safety_transitions():
     mission = FlightMission()
     tick(mission, 1.0, 0.0, 1.0, False, True)
     tick(mission, 13.0, 0.0, 13.0, False, True)
-    mission.request('arm', 13.1)
+    mission.request(Action.ARM, 13.1)
     assert tick(mission, 28.2, 0.0, 28.2, False, True).arm is False
     assert mission.phase == Phase.FAULT
     assert mission.fault_reason == 'Arming not confirmed'

@@ -10,7 +10,7 @@ from los_tracking.types import AttitudeSample, BarometerSample, State, TargetObs
 from ..altitude_control import HOVER_THROTTLE
 from ..blackboard import StepContext
 from ..sensor_estimator import TargetSensorEstimator
-from .base import Command, MAX_HEIGHT_M, MIN_HEIGHT_M, MissionBase, Phase, Readiness
+from .base import Action, Command, MAX_HEIGHT_M, MIN_HEIGHT_M, MissionBase, Mode, Phase, Readiness
 
 TARGET_HEIGHT_M = 10.0
 TARGET_HOVER_S = 5.0
@@ -81,7 +81,7 @@ def _demand_command(demand, config):
 
 
 class TargetMission(MissionBase):
-    def __init__(self, config_path, mode='manual', blackboard=None):
+    def __init__(self, config_path, mode: Mode | str = Mode.MANUAL, blackboard=None):
         super().__init__(mode, 'target-hit', TARGET_HEIGHT_M, TARGET_HOVER_S, blackboard)
         self.airborne_phases = self.airborne_phases | TARGET_PHASES
         for source in TARGET_PHASES:
@@ -117,7 +117,7 @@ class TargetMission(MissionBase):
             self.sensor_estimator.start_los()
 
     def request_height(self, height_m: float) -> None:
-        if self.mode != 'manual':
+        if self.mode != Mode.MANUAL:
             raise ValueError('Target height requires manual mode')
         if self.phase not in (Phase.DISARMED, Phase.ARMED) or self.started or self.attempted:
             raise ValueError('Target height requires idle flight before Start')
@@ -162,13 +162,13 @@ class TargetMission(MissionBase):
                 Phase.SEARCH, Phase.CENTER, Phase.SETTLE, Phase.LOS, Phase.COMMIT):
             self.blackboard.visual.contact = True
 
-    def request(self, action, now, altitude_m=None, height_m=None, *, automatic=False):
-        if action in ('arm', 'start') and not self.sync_ready(now):
+    def request(self, action: Action, now, altitude_m=None, height_m=None, *, automatic=False):
+        if action in (Action.ARM, Action.START) and not self.sync_ready(now):
             raise ValueError('MAVLink TIMESYNC not ready')
-        if self.attempted and action in ('arm', 'start'):
+        if self.attempted and action in (Action.ARM, Action.START):
             raise ValueError('Target mission permits one attempt per process')
         super().request(action, now, altitude_m, height_m, automatic=automatic)
-        if action == 'start':
+        if action == Action.START:
             self.attempted = True
 
     @property
@@ -252,7 +252,7 @@ class TargetMission(MissionBase):
         if not firmware_armed:
             self.fault('Vehicle unexpectedly disarmed', now)
             return Command(1000, False)
-        if self.mode == 'manual' and not view_alive:
+        if self.mode == Mode.MANUAL and not view_alive:
             self._fail('Bullet View connection lost', now)
             return super().step(context)
         if self.blackboard.visual.contact:

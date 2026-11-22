@@ -52,3 +52,5 @@
 | [0048 Target-hit mission guide](0048-target-hit-mission-guide.md) | Explain target-hit setup, phase transitions, LOS inputs, contact, and failure behavior. | Implemented; links and source checked | `fae5430` |
 | [0049 Shared mission base](0049-shared-mission-base.md) | Keep the base mission limited to shared flight behavior and move target-only methods to concrete missions. | Implemented; 51 tests passed | `fae5430` |
 | [0050 Local readiness enum](0050-local-readiness-enum.md) | Name App readiness values while preserving numeric MAVLink status and avoiding a shared Python flight contract. | Implemented; 52 App and 90 View tests passed | `fae5430` |
+| [0051 Mission action enum](0051-mission-action-enum.md) | Use App-owned action members for mission requests while preserving MAVLink commands and ACK IDs. | Implemented; 53 tests passed | Pending (no commit requested) |
+| [0052 Mission mode enum](0052-mission-mode-enum.md) | Store approval mode as an App-owned enum while keeping CLI text and MAVLink status values. | Implemented; 54 tests passed | Pending (no commit requested) |

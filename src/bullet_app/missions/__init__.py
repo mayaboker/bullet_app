@@ -1,5 +1,5 @@
 """Startup-selected mission implementations."""
-from .base import Command, MissionBase, Phase, PHASE_IDS
+from .base import Action, Command, MissionBase, Mode, Phase, PHASE_IDS
 from .hover_land import DEFAULT_PROFILE, HoverLandMission, HoverLandSettings
 from .target_hit import TargetMission
 

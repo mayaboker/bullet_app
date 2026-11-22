@@ -51,6 +51,24 @@ class Readiness(IntEnum):
     RESET_REQUIRED = 4
 
 
+class Action(Enum):
+    """App-owned requests that can change a mission's flight state."""
+
+    ARM = 'arm'
+    START = 'start'
+    LAND = 'land'
+    DISARM = 'disarm'
+    EMERGENCY = 'emergency'
+    HEIGHT = 'height'
+
+
+class Mode(Enum):
+    """Select automatic or operator-approved mission actions."""
+
+    AUTO = 'auto'
+    MANUAL = 'manual'
+
+
 PHASE_IDS = {phase: index for index, phase in enumerate(Phase)}
 AIRBORNE_PHASES = frozenset((Phase.TAKEOFF, Phase.HOVER, Phase.LAND))
 SHARED_PHASE_EDGES = (
@@ -77,12 +95,13 @@ class Command:
 class MissionBase:
     """Share arm, climb, hover, landing, and disarm transitions."""
 
-    def __init__(self, mode: str, mission_kind: str, height_m: float, hover_duration_s: float,
+    def __init__(self, mode: Mode | str, mission_kind: str, height_m: float, hover_duration_s: float,
                  blackboard: Blackboard | None = None):
         """Initialize mission timing, control state, and its permitted phase graph."""
-        if mode not in ('auto', 'manual'):
-            raise ValueError('mode must be auto or manual')
-        self.mode = mode
+        try:
+            self.mode = Mode(mode)
+        except (TypeError, ValueError) as error:
+            raise ValueError('mode must be auto or manual') from error
         self.blackboard = blackboard if blackboard is not None else Blackboard()
         self.phase = Phase.PREARM
         self.entered_at: float | None = None
@@ -160,48 +179,52 @@ class MissionBase:
             return Readiness.RESET_REQUIRED
         return Readiness.UNAVAILABLE
 
+
     def fault(self, reason: str, now: float) -> None:
         """Record the failure reason and enter the disarmed-command fault phase."""
         self.fault_reason = reason
         self._enter(Phase.FAULT, now)
 
-    def request(self, action: str, now: float, altitude_m: float | None = None,
+    def request(self, action: Action, now: float, altitude_m: float | None = None,
                 height_m: float | None = None, *, automatic: bool = False) -> None:
         """Apply an operator or automatic action after mode and phase checks.
 
-        Accepted actions change phase synchronously; Start saves the measured
-        altitude as the launch datum. Invalid requests raise ``ValueError``.
+        ``action`` must be an ``Action`` member. Accepted actions change phase
+        synchronously; Start saves the measured altitude as the launch datum.
+        Invalid requests raise ``ValueError``.
         """
+        if not isinstance(action, Action):
+            raise ValueError('Unsupported flight action')
         if self.phase == Phase.FAULT:
             raise ValueError('App fault; restart required')
-        if self.mode == 'auto' and self.started and action in ('arm', 'start'):
+        if self.mode == Mode.AUTO and self.started and action in (Action.ARM, Action.START):
             raise ValueError('Automatic mission permits one attempt per process')
-        if action == 'height':
+        if action == Action.HEIGHT:
             raise ValueError('Height is fixed by the mission profile')
-        elif action == 'arm':
-            if automatic != (self.mode == 'auto'):
+        elif action == Action.ARM:
+            if automatic != (self.mode == Mode.AUTO):
                 raise ValueError('Arm requires the selected approval mode')
             if self.phase != Phase.DISARMED:
                 raise ValueError('App is not disarmed and ready')
             self._enter(Phase.ARMING, now)
-        elif action == 'start':
-            if automatic != (self.mode == 'auto'):
+        elif action == Action.START:
+            if automatic != (self.mode == Mode.AUTO):
                 raise ValueError('Start requires the selected approval mode')
             if self.phase != Phase.ARMED or altitude_m is None or not isfinite(altitude_m):
                 raise ValueError('Confirmed arm and fresh altitude required')
             self.ground_altitude_m = altitude_m
             self.started = True
             self._enter(Phase.TAKEOFF, now)
-        elif action == 'land':
+        elif action == Action.LAND:
             if self.phase not in self.airborne_phases - {Phase.LAND}:
                 raise ValueError('Active flight required to land')
             self._enter(Phase.LAND, now)
-        elif action == 'disarm':
+        elif action == Action.DISARM:
             if self.phase == Phase.ARMED:
                 self._enter(Phase.DISARMING, now)
             elif self.phase != Phase.DISARMED:
                 raise ValueError('Emergency confirmation required while flying')
-        elif action == 'emergency':
+        elif action == Action.EMERGENCY:
             self.fault('Emergency disarm requested', now)
         else:
             raise ValueError('Unsupported flight action')
@@ -235,7 +258,7 @@ class MissionBase:
 
     def _handle_view_loss(self, now: float, view_alive: bool) -> None:
         """Disarm idle or land airborne manual flight when View is absent."""
-        if self.mode != 'manual' or view_alive:
+        if self.mode != Mode.MANUAL or view_alive:
             return
         if self.phase in (Phase.ARMING, Phase.ARMED):
             self._enter(Phase.DISARMING, now)

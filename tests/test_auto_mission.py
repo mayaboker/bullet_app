@@ -5,7 +5,7 @@ from pymavlink import mavutil
 from pymavlink.dialects.v20 import common
 
 from bullet_app.cli import AppOptions, CliParser, DEFAULT_TARGET_PROFILE
-from bullet_app.flight import Command, FlightMission, Phase
+from bullet_app.flight import Action, Command, FlightMission, Mode, Phase
 from bullet_app.mission import _advance_automatic_start, _automatic_result, _send_command
 from bullet_app.missions import create_mission
 from bullet_app.missions.hover_land import HoverLandSettings
@@ -19,18 +19,18 @@ def ready(mode='manual', ground=42.0):
     assert tick(mission, 100, ground, 100, False, True) == Command(1000, False)
     tick(mission, 112, ground, 112, False, True)
     assert mission.phase == Phase.DISARMED
-    mission.request('arm', 112.1, automatic=mode == 'auto')
+    mission.request(Action.ARM, 112.1, automatic=mode == 'auto')
     assert tick(mission, 112.2, ground, 112.2, False, True).arm
     tick(mission, 112.3, ground, 112.3, True, True)
     assert mission.phase == Phase.ARMED
-    mission.request('start', 112.4, ground, automatic=mode == 'auto')
+    mission.request(Action.START, 112.4, ground, automatic=mode == 'auto')
     return mission
 
 
 def test_auto_runs_without_view_and_stops_after_one_flight():
     mission = FlightMission('auto')
     with pytest.raises(ValueError):
-        mission.request('arm', 1)
+        mission.request(Action.ARM, 1)
     tick(mission, 100, 42, 100, False, True)
     tick(mission, 112, 42, 112, False, True)
     assert mission.phase == Phase.DISARMED
@@ -55,7 +55,7 @@ def test_auto_runs_without_view_and_stops_after_one_flight():
     tick(mission, now + .1, 42.1, now + .1, False, True)
     assert mission.phase == Phase.DISARMED
     with pytest.raises(ValueError, match='one attempt'):
-        mission.request('arm', 126, automatic=True)
+        mission.request(Action.ARM, 126, automatic=True)
 
 
 def test_manual_approval_uses_profile_height_and_accepts_land():
@@ -63,11 +63,11 @@ def test_manual_approval_uses_profile_height_and_accepts_land():
     tick(mission, 100, 42, 100, False, True)
     tick(mission, 112, 42, 112, False, True)
     with pytest.raises(ValueError, match='mission profile'):
-        mission.request('height', 112.1, height_m=100)
+        mission.request(Action.HEIGHT, 112.1, height_m=100)
     assert mission.height_m == 20
-    mission.request('arm', 112.2)
+    mission.request(Action.ARM, 112.2)
     tick(mission, 112.3, 42, 112.3, True, True)
-    mission.request('start', 112.4, 42)
+    mission.request(Action.START, 112.4, 42)
     tick(mission, 113, 62, 113, True, True)
     tick(mission, 113.1, 62, 113.1, True, True)
     for now in (113.3, 113.5, 113.7):
@@ -75,7 +75,7 @@ def test_manual_approval_uses_profile_height_and_accepts_land():
     assert mission.phase == Phase.HOVER
     tick(mission, 120, 62, 120, True, True)
     assert mission.phase == Phase.TAKEOFF  # long sample gap invalidates hover speed
-    mission.request('land', 120.1)
+    mission.request(Action.LAND, 120.1)
     assert mission.phase == Phase.LAND
     tick(mission, 120.2, 61, 120.2, True, False)
     assert mission.phase == Phase.LAND
@@ -88,13 +88,13 @@ def test_view_loss_lands_or_disarms_and_fault_blocks_restart():
     other = FlightMission('manual')
     tick(other, 100, 0, 100, False, True)
     tick(other, 112, 0, 112, False, True)
-    other.request('arm', 112.1)
+    other.request(Action.ARM, 112.1)
     tick(other, 112.2, 0, 112.2, True, True)
     tick(other, 113, 0, 113, True, False)
     assert other.phase == Phase.DISARMING
     other.fault('telemetry stale', 114)
     with pytest.raises(ValueError, match='fault'):
-        other.request('arm', 115)
+        other.request(Action.ARM, 115)
 
 
 def test_command_mapping_and_cli():
@@ -107,13 +107,32 @@ def test_command_mapping_and_cli():
     assert CliParser().parse([]) == AppOptions()
     assert CliParser().parse(['--mode', 'manual']).mode == 'manual'
     message = SimpleNamespace(command=21, **{f'param{i}': 0.0 for i in range(1, 8)})
-    assert _command(message) == ('land', None)
+    assert _command(message) == (Action.LAND, None)
     message.command = 31012
     message.param1 = 12.5
-    assert _command(message) == ('height', 12.5)
+    assert _command(message) == (Action.HEIGHT, 12.5)
     message.param2 = 3.5
     with pytest.raises(ValueError, match='Unsupported'):
         _command(message)
+
+
+def test_request_requires_an_action_member():
+    mission = FlightMission('manual')
+    with pytest.raises(ValueError, match='Unsupported flight action'):
+        mission.request('arm', 1.)
+    target = TargetMission(DEFAULT_TARGET_PROFILE)
+    with pytest.raises(ValueError, match='Unsupported flight action'):
+        target.request('arm', 1.)
+
+
+def test_mission_mode_normalizes_cli_text_and_accepts_enum():
+    assert FlightMission('auto').mode is Mode.AUTO
+    assert FlightMission(Mode.MANUAL).mode is Mode.MANUAL
+    assert FlightMission().mode is Mode.MANUAL
+    with pytest.raises(ValueError, match='mode must be auto or manual'):
+        FlightMission('other')
+    with pytest.raises(ValueError, match='mode must be auto or manual'):
+        FlightMission(None)
 
 
 def test_target_height_locks_on_start_and_hover_duration_is_fixed():
@@ -160,6 +179,7 @@ def test_view_link_applies_target_height_and_acks_denial():
     assert (mission.height_m, mission.hover_duration_s) == (12.5, 5.)
     assert [ack[:2] for ack in acks] == [(31012, mavutil.mavlink.MAV_RESULT_ACCEPTED),
                                          (31012, mavutil.mavlink.MAV_RESULT_DENIED)]
+    assert [ack[3] for ack in acks] == [5, 0]
 
 
 def test_view_link_rejects_wrong_source_and_acks_commands():
@@ -280,7 +300,7 @@ def test_hover_profile_and_startup_selection(tmp_path):
     options = CliParser().parse(['--mission', 'hover-land', '--mission-config', str(profile)])
     mission = create_mission(options)
     assert mission.height_m == 25 and mission.hover_duration_s == 3
-    assert mission.mode == 'manual'
+    assert mission.mode is Mode.MANUAL
     assert create_mission(CliParser().parse(['--mission', 'target-hit'])).mission_kind == 'target-hit'
     profile.write_text('altitude_m: 101\nhover_duration_s: 3\n')
     with pytest.raises(ValueError, match='altitude'):
