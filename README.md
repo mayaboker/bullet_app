@@ -1,9 +1,12 @@
 # Bullet App
 
-Bullet App is a simulation-only flight controller. Start the `bullet_drone`
-launcher first, then start the app and Bullet View as separate processes. The app
-uses `beta_client` to read Betaflight MAVLink on TCP 5762 and send MSP RC on TCP
-5761. App streams MAVLink to View on loopback UDP 14550; View returns its
+Bullet App is a Betaflight mission controller whose current flight logic and
+throttle tuning are verified for SITL. For the default TCP setup, start the
+`bullet_drone` launcher first, then start the app and Bullet View as separate
+processes. The app uses `beta_client` to read Betaflight MAVLink on TCP 5762 and
+send MSP RC on TCP 5761 by default. Its [connection YAML](src/bullet_app/app.yaml)
+can select separate TCP or serial links for MSP and MAVLink. Serial hardware
+flight has not been verified. App streams MAVLink to View on loopback UDP 14550; View returns its
 heartbeat and flight commands on the same connection, and App replies with
 command ACKs. The app does not import the simulator or renderer.
 App–View flight readiness is carried as a numeric MAVLink `MIS_READY` value;
@@ -46,6 +49,7 @@ uv sync --group dev
 uv run --locked bullet-app --mission hover-land
 # For one unattended flight: uv run --locked bullet-app --mode auto --mission hover-land
 # Select another startup profile: --mission-config path/to/hover_land.yaml
+# Select another Betaflight connection config: --config path/to/app.yaml
 
 cd /home/user/projects/bullet_view
 uv run --locked bullet-view
@@ -70,8 +74,15 @@ Automatic mode does not require View. Stale SITL telemetry causes
 an app fault and disarm; restart the app before another flight. Emergency
 Disarm in View immediately stops motors and requires an app restart.
 
-`--msp-host`, `--msp-port`, and `--mavlink-endpoint` select nondefault SITL
-connections. This controller and its throttle tuning are for SITL only.
+App reads the bundled [app.yaml](src/bullet_app/app.yaml) at startup. Copy it
+and pass `--config path/to/app.yaml` to change Betaflight connections. The file
+comments explain every field. Set `betaflight.msp.type` and
+`betaflight.mavlink.type` independently to `tcp` or `serial`. For MSP serial,
+set `device` and `baudrate`; for MAVLink serial, set `endpoint` to the device
+path and set `baudrate`. The two protocols need ports configured for their
+respective functions in Betaflight. `--msp-host` and `--msp-port` override the
+YAML TCP MSP address; `--mavlink-endpoint` overrides the YAML MAVLink endpoint.
+TCP MSP flags are rejected when MSP is set to serial.
 
 ## Logs
 

@@ -1,0 +1,23 @@
+# Betaflight links used by Bullet App. Both links are independent, so a setup
+# may use TCP for one protocol and serial for the other.
+betaflight:
+  # MSP carries RC commands and the board-identity request to Betaflight.
+  msp:
+    # Select "tcp" for SITL or "serial" for an MSP-enabled serial port.
+    type: tcp
+    # TCP host; used only when msp.type is "tcp".
+    host: 127.0.0.1
+    # TCP port (1–65535); used only when msp.type is "tcp".
+    port: 5761
+    # Serial device path; set this to the MSP port when msp.type is "serial".
+    device: /dev/ttyUSB0
+    # MSP serial baud rate in bits/s; used only when msp.type is "serial".
+    baudrate: 115200
+  # MAVLink carries Betaflight heartbeat, altitude, attitude, and TIMESYNC.
+  mavlink:
+    # Select "tcp" for a TCP endpoint or "serial" for a MAVLink serial device.
+    type: tcp
+    # TCP: "tcp:host:port". Serial: device path such as "/dev/ttyUSB1".
+    endpoint: tcp:127.0.0.1:5762
+    # Serial MAVLink baud rate in bits/s; ignored for a TCP endpoint.
+    baudrate: 57600

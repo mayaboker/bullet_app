@@ -1,8 +1,11 @@
 """Safety and side-effect ordering at the App runtime boundary."""
 from types import SimpleNamespace
 
+import pytest
+
 from bullet_app import app
 from bullet_app.blackboard import StepContext
+from bullet_app.config import DEFAULT_CONFIG
 from bullet_app.missions import Command, Mode, Phase
 from bullet_app.runtime_diagnostics import RuntimeDiagnostics
 
@@ -41,8 +44,10 @@ def test_missing_altitude_keeps_startup_allowance_then_faults():
     assert mission.phase == Phase.FAULT
 
 
-def test_auto_run_publishes_before_result_and_final_disarm(monkeypatch):
+@pytest.mark.parametrize('serial', (False, True))
+def test_auto_run_publishes_before_result_and_final_disarm(monkeypatch, tmp_path, serial):
     events = []
+    connections = []
 
     class Resource:
         def __enter__(self):
@@ -52,8 +57,8 @@ def test_auto_run_publishes_before_result_and_final_disarm(monkeypatch):
             return None
 
     class Telemetry(Resource):
-        def __init__(self, *_):
-            pass
+        def __init__(self, endpoint, *, baud=None):
+            connections.append(('mavlink', endpoint, baud))
 
         def set_message_rate(self, *_):
             pass
@@ -99,7 +104,16 @@ def test_auto_run_publishes_before_result_and_final_disarm(monkeypatch):
             super().observe_periodic(*args, **kwargs)
 
     monkeypatch.setattr(app, 'MavlinkTelemetry', Telemetry)
-    monkeypatch.setattr(app, 'TcpTransport', lambda *_: Resource())
+    def tcp_transport(host, port):
+        connections.append(('msp tcp', host, port))
+        return Resource()
+
+    def serial_transport(device, baudrate):
+        connections.append(('msp serial', device, baudrate))
+        return Resource()
+
+    monkeypatch.setattr(app, 'TcpTransport', tcp_transport)
+    monkeypatch.setattr(app, 'SerialTransport', serial_transport)
     monkeypatch.setattr(app, 'ViewLink', View)
     monkeypatch.setattr(app, 'create_mission', lambda *_: Mission())
     monkeypatch.setattr(app, 'RuntimeDiagnostics', Diagnostics)
@@ -107,7 +121,19 @@ def test_auto_run_publishes_before_result_and_final_disarm(monkeypatch):
     monkeypatch.setattr(app.time, 'monotonic', lambda: 100.0)
     monkeypatch.setattr(app, '_send_command', lambda _transport, command: events.append(f'send {command.throttle}'))
 
-    options = SimpleNamespace(mission='hover-land', mavlink_endpoint='', msp_host='', msp_port=0)
+    config_path = DEFAULT_CONFIG
+    if serial:
+        config_path = tmp_path / 'app.yaml'
+        config_path.write_text('betaflight:\n  msp:\n    type: serial\n'
+                               '    device: /dev/ttyUSB0\n    baudrate: 115200\n'
+                               '  mavlink:\n    type: serial\n'
+                               '    endpoint: /dev/ttyUSB1\n    baudrate: 57600\n')
+    options = SimpleNamespace(mission='hover-land', config=config_path,
+                              mavlink_endpoint=None, msp_host=None, msp_port=None)
     assert app.run_mission(options) == 0
+    assert connections == ([('mavlink', '/dev/ttyUSB1', 57600),
+                            ('msp serial', '/dev/ttyUSB0', 115200)] if serial else [
+                            ('mavlink', 'tcp:127.0.0.1:5762', None),
+                            ('msp tcp', '127.0.0.1', 5761)])
     assert events == ['poll', 'step', 'send 1300', 'publish', 'diagnostics',
                       'send 1000', 'send 1000', 'send 1000']

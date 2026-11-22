@@ -4,23 +4,23 @@ from pathlib import Path
 
 import click
 
-DEFAULT_MSP_HOST = '127.0.0.1'
-DEFAULT_MSP_PORT = 5761
-DEFAULT_MAVLINK_ENDPOINT = 'tcp:127.0.0.1:5762'
+from .config import DEFAULT_CONFIG
+
 DEFAULT_MODE = 'manual'
 DEFAULT_TARGET_PROFILE = Path(__file__).resolve().parents[3] / 'los_tracking/examples/bullet_profile.yaml'
 
 
 @dataclass(frozen=True, slots=True)
 class AppOptions:
-    msp_host: str = DEFAULT_MSP_HOST
-    msp_port: int = DEFAULT_MSP_PORT
-    mavlink_endpoint: str = DEFAULT_MAVLINK_ENDPOINT
+    msp_host: str | None = None
+    msp_port: int | None = None
+    mavlink_endpoint: str | None = None
     mode: str = DEFAULT_MODE
     mission: str = 'hover-land'
     mission_config: Path | None = None
     bbox_endpoint: str = 'tcp://127.0.0.1:5560'
     contact_endpoint: str = 'tcp://127.0.0.1:5555'
+    config: Path = DEFAULT_CONFIG
 
 
 class CliParser:
@@ -28,9 +28,12 @@ class CliParser:
 
     def parse(self, argv=None) -> AppOptions | int:
         @click.command()
-        @click.option('--msp-host', default=DEFAULT_MSP_HOST, show_default=True)
-        @click.option('--msp-port', type=click.IntRange(1, 65535), default=DEFAULT_MSP_PORT, show_default=True)
-        @click.option('--mavlink-endpoint', default=DEFAULT_MAVLINK_ENDPOINT, show_default=True)
+        @click.option('--config', type=click.Path(exists=True, dir_okay=False, path_type=Path),
+                      default=DEFAULT_CONFIG, show_default=True,
+                      help='Betaflight MSP and MAVLink TCP or serial connection YAML')
+        @click.option('--msp-host', help='Override TCP MSP host from the config')
+        @click.option('--msp-port', type=click.IntRange(1, 65535), help='Override TCP MSP port from the config')
+        @click.option('--mavlink-endpoint', help='Override MAVLink TCP endpoint or serial device from the config')
         @click.option('--mode', type=click.Choice(('manual', 'auto')), default=DEFAULT_MODE, show_default=True,
                       help='manual waits for View Arm/Start; auto starts one flight without View')
         @click.option('--mission', type=click.Choice(('hover-land', 'target-hit')), default='hover-land', show_default=True)
@@ -38,9 +41,11 @@ class CliParser:
                       help='Profile for the selected mission; defaults to its packaged profile')
         @click.option('--bbox-endpoint', default='tcp://127.0.0.1:5560')
         @click.option('--contact-endpoint', default='tcp://127.0.0.1:5555')
-        def command(msp_host, msp_port, mavlink_endpoint, mode, mission, mission_config, bbox_endpoint, contact_endpoint):
-            """Run a selected SITL mission with manual or automatic approval."""
-            return AppOptions(msp_host, msp_port, mavlink_endpoint, mode, mission, mission_config,
-                              bbox_endpoint, contact_endpoint)
+        def command(config, msp_host, msp_port, mavlink_endpoint, mode, mission, mission_config,
+                    bbox_endpoint, contact_endpoint):
+            """Run a selected Betaflight mission with manual or automatic approval."""
+            return AppOptions(msp_host=msp_host, msp_port=msp_port, mavlink_endpoint=mavlink_endpoint,
+                              mode=mode, mission=mission, mission_config=mission_config,
+                              bbox_endpoint=bbox_endpoint, contact_endpoint=contact_endpoint, config=config)
 
         return command.main(args=argv, prog_name='bullet-app', standalone_mode=False)

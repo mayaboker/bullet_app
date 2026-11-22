@@ -58,3 +58,5 @@
 | [0054 Rename mission runtime to app](0054-rename-mission-runtime-to-app.md) | Rename the runtime module and update imports and documentation references. | Implemented; 54 tests and CLI help passed | Pending (no commit requested) |
 | [0055 KISS method readability guidance](0055-kiss-method-readability.md) | Guide extraction of cohesive helpers from long orchestration methods without needless abstraction. | Implemented; diff checked | Pending (no commit requested) |
 | [0056 Readable App control loop](0056-readable-app-control-loop.md) | Extract input, safety, and diagnostics responsibilities from the 50 Hz runtime loop. | Implemented; 57 tests passed | Pending (no commit requested) |
+| [0057 Betaflight connection config](0057-betaflight-connection-config.md) | Select TCP or serial MSP and MAVLink links from a commented YAML config. | Implemented; 65 tests and wheel build passed | Pending (no commit requested) |
+| [0058 Open MAVLink helper](0058-open-mavlink-helper.md) | Make TCP and serial MAVLink construction explicit beside the MSP helper. | Implemented; 65 tests passed | Pending (no commit requested) |

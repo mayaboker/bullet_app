@@ -1,6 +1,6 @@
 # Bullet App mission control loop
 
-Bullet App is the controller between Betaflight and the operator. It reads Betaflight telemetry over MAVLink, chooses an RC command in a paced 50 Hz loop, and sends that command over MSP. Bullet View provides operator requests and receives App state on a separate MAVLink link. The `target-hit` mission also consumes detector boxes and a confirmed contact event over ZeroMQ. App does not read simulator pose or other ground-truth flight feedback.
+Bullet App is the controller between Betaflight and the operator. It reads Betaflight telemetry over MAVLink, chooses an RC command in a paced 50 Hz loop, and sends that command over MSP. Each Betaflight link can use TCP or serial as selected in the [connection YAML](../src/bullet_app/app.yaml); the diagram shows the default TCP ports. Bullet View provides operator requests and receives App state on a separate MAVLink link. The `target-hit` mission also consumes detector boxes and a confirmed contact event over ZeroMQ. App does not read simulator pose or other ground-truth flight feedback.
 
 ## Component relationships
 

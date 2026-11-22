@@ -5,11 +5,12 @@ import time
 from beta_client.entities import RcChannels
 from beta_client.mavlink import MavlinkTelemetry
 from beta_client.msp import read_board_identifier, send_rc
-from beta_client.transport import TcpTransport
+from beta_client.transport import SerialTransport, TcpTransport
 from loguru import logger
 from pymavlink import mavutil
 
 from .blackboard import Blackboard, StepContext
+from .config import AppConfig, ConnectionType
 from .ingress import TargetIngress
 from .missions import Action, Command, Mode, Phase, create_mission
 from .runtime_diagnostics import RuntimeDiagnostics
@@ -28,7 +29,7 @@ ALTITUDE_STARTUP_TIMEOUT_S = 10.0
 DISARM_SEND_COUNT = 3
 
 
-def _send_command(transport: TcpTransport, command: Command) -> None:
+def _send_command(transport: TcpTransport | SerialTransport, command: Command) -> None:
     channels = RcChannels((command.roll, command.pitch, command.throttle, command.yaw,
                            AUX_HIGH if command.arm else AUX_LOW, AUX_HIGH, AUX_LOW, AUX_LOW))
     send_rc(transport, channels)
@@ -57,7 +58,7 @@ def _automatic_result(mission, firmware_armed: bool) -> int | None:
     return None
 
 
-def _confirm_sitl(transport: TcpTransport) -> bool:
+def _confirm_sitl(transport: TcpTransport | SerialTransport) -> bool:
     """Read the Betaflight board identity without preventing startup on failure."""
     try:
         board_identifier = read_board_identifier(transport)
@@ -67,6 +68,20 @@ def _confirm_sitl(transport: TcpTransport) -> bool:
     logger.info('Betaflight board identifier: {} (SITL {})', board_identifier,
                 'confirmed' if board_identifier == 'SITL' else 'not confirmed')
     return board_identifier == 'SITL'
+
+
+def _open_msp(config: AppConfig) -> TcpTransport | SerialTransport:
+    """Open the selected MSP transport after configuration is validated."""
+    if config.msp.type is ConnectionType.TCP:
+        return TcpTransport(config.msp.host, config.msp.port)
+    return SerialTransport(config.msp.device, config.msp.baudrate)
+
+
+def _open_mavlink(config: AppConfig) -> MavlinkTelemetry:
+    """Create telemetry for a TCP endpoint or a serial device and baud rate."""
+    if config.mavlink.type is ConnectionType.TCP:
+        return MavlinkTelemetry(config.mavlink.endpoint)
+    return MavlinkTelemetry(config.mavlink.endpoint, baud=config.mavlink.baudrate)
 
 
 def _collect_inputs(mission, context: StepContext, ingress, view) -> None:
@@ -108,17 +123,20 @@ def _step_with_safety(mission, context: StepContext, connected_at: float) -> Com
 
 def run_mission(options) -> int:
     """Run one auto flight or serve repeated View-approved flights."""
+    config = AppConfig.from_yaml(options.config).with_overrides(
+        msp_host=options.msp_host, msp_port=options.msp_port,
+        mavlink_endpoint=options.mavlink_endpoint)
     blackboard = Blackboard()
     blackboard.reset()
     mission = create_mission(options, blackboard)
     tracking_log = TrackingLog() if mission.mission_kind == 'target-hit' else None
     with ExitStack() as resources:
-        telemetry = resources.enter_context(MavlinkTelemetry(options.mavlink_endpoint))
+        telemetry = resources.enter_context(_open_mavlink(config))
         telemetry.set_message_rate(mavutil.mavlink.MAVLINK_MSG_ID_VFR_HUD, TELEMETRY_RATE_HZ)
         telemetry.set_message_rate(mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, TELEMETRY_RATE_HZ)
         if options.mission == 'target-hit':
             telemetry.enable_timesync()
-        transport = resources.enter_context(TcpTransport(options.msp_host, options.msp_port))
+        transport = resources.enter_context(_open_msp(config))
         sitl_confirmed = _confirm_sitl(transport)
         view = resources.enter_context(ViewLink())
         view.sitl_confirmed = sitl_confirmed
