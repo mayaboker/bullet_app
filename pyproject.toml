@@ -8,7 +8,17 @@ version = "0.1.0"
 description = "Standalone automatic SITL takeoff, hover and landing mission"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["beta-client", "bullet-simulation-protocol", "los-tracking", "click>=8.5,<9", "loguru>=0.7,<1", "pymavlink>=2.4.50,<3", "pyzmq>=27,<28", "PyYAML>=6,<7"]
+dependencies = [
+    "beta-client",
+    "bullet-simulation-protocol",
+    "los-tracking",
+    "click>=8.5,<9",
+    "loguru>=0.7,<1",
+    "pymavlink>=2.4.50,<3",
+    "pyzmq>=27,<28",
+    "PyYAML>=6,<7",
+    "transitions>=0.9.3,<1",
+]
 
 [project.scripts]
 bullet-app = "bullet_app.main:main"

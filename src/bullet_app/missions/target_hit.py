@@ -92,6 +92,16 @@ class TargetMission(MissionBase):
         self.last_navigation_input = None
         self.last_navigation_result = None
 
+    def _on_phase_changed(self, event):
+        super()._on_phase_changed(event)
+        if self.phase == Phase.SEARCH and event.transition.source == Phase.HOVER.name:
+            self.search_started = event.kwargs['now']
+            self.swept = 0.0
+            self.last_yaw = None
+        elif self.phase == Phase.LOS:
+            self.los_started = event.kwargs['now']
+            self.sensor_estimator.start_los()
+
     def request_height(self, height_m: float) -> None:
         if self.mode != 'manual':
             raise ValueError('Target height requires manual mode')
@@ -262,8 +272,6 @@ class TargetMission(MissionBase):
                             self.settled_at = now
                         elif now - self.settled_at >= SETTLE_S:
                             self._enter(Phase.LOS, now)
-                            self.los_started = now
-                            self.sensor_estimator.start_los()
                     else:
                         self.settled_at = None
             if self.phase != Phase.LOS:
@@ -303,6 +311,3 @@ class TargetMission(MissionBase):
 
     def _on_hover_complete(self, now):
         self._enter(Phase.SEARCH, now)
-        self.search_started = now
-        self.swept = 0.0
-        self.last_yaw = None

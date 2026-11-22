@@ -44,3 +44,7 @@
 | [0040 Height-only target control](0040-height-only-target-control.md) | Restore one target height setting and fix pre-search hover at five seconds. | Implemented; 32 App tests passed | `cd22cd8` |
 | [0041 Persistent tracking logs](0041-persistent-tracking-logs.md) | Save each App run and 5 Hz target guidance checkpoints in workspace logs. | Implemented; 36 App tests and CLI smoke passed | `3b40552` (App), `e81c4db` (workspace) |
 | [0042 SITL identification in App heartbeat](0042-sitl-heartbeat.md) | Query MSP board identity at startup and carry SITL confirmation in App heartbeat. | Implemented; tests and live SITL heartbeat passed | `3fbc039dd13634274c1896758f830876c598b8c9` (beta_client), `ed4d66aa2c2c392e612a9f8529ed32e6b81d371e` (App) |
+| [0043 Raw MAVLink ZMQ/MCAP recording](0043-mavlink-zmq-mcap-recording.md) | Publish selected raw MAVLink packets with a timestamp envelope for opaque MCAP recording. | Planned | Pending |
+| [0044 Mission control loop diagram](0044-mission-control-loop-diagram.md) | Explain App components and its 50 Hz loop with Mermaid diagrams. | Implemented; links and source checked | Pending |
+| [0045 Hover-land mission guide](0045-hover-land-mission-guide.md) | Explain the implemented hover-land mission, control thresholds, and operator behavior. | Implemented; links and source checked | Pending |
+| [0046 Transitions mission state machine](0046-transitions-mission-state-machine.md) | Move shared and target mission phases into an ordered transitions machine. | Implemented; 42 tests passed | Pending |

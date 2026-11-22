@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from enum import Enum
 from math import isfinite
+from transitions import Machine
 
 from ..altitude_control import AltitudeControl
 
@@ -40,6 +41,30 @@ class Phase(str, Enum):
 
 
 PHASE_IDS = {phase: index for index, phase in enumerate(Phase)}
+AIRBORNE_PHASES = frozenset((Phase.TAKEOFF, Phase.HOVER, Phase.LAND, Phase.SEARCH,
+                            Phase.CENTER, Phase.SETTLE, Phase.LOS, Phase.COMMIT))
+TARGET_PHASES = frozenset((Phase.SEARCH, Phase.CENTER, Phase.SETTLE, Phase.LOS, Phase.COMMIT))
+SHARED_PHASE_EDGES = (
+    (Phase.PREARM, Phase.DISARMED),
+    (Phase.DISARMED, Phase.ARMING),
+    (Phase.ARMING, Phase.ARMED),
+    (Phase.ARMED, Phase.TAKEOFF),
+    (Phase.TAKEOFF, Phase.HOVER),
+    (Phase.HOVER, Phase.TAKEOFF),
+    (Phase.LAND, Phase.DISARMING),
+    (Phase.DISARMING, Phase.DISARMED),
+)
+TARGET_PHASE_EDGES = (
+    (Phase.HOVER, Phase.SEARCH),
+    (Phase.SEARCH, Phase.CENTER),
+    (Phase.SEARCH, Phase.SETTLE),
+    (Phase.CENTER, Phase.SEARCH),
+    (Phase.CENTER, Phase.SETTLE),
+    (Phase.SETTLE, Phase.SEARCH),
+    (Phase.SETTLE, Phase.CENTER),
+    (Phase.SETTLE, Phase.LOS),
+    (Phase.LOS, Phase.COMMIT),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,19 +96,56 @@ class MissionBase:
         self.mission_kind = mission_kind
         self.result: str | None = None
         self.started = False
+        self._requested_phase: Phase | None = None
+        self.machine = Machine(model=self, states=list(Phase), initial=Phase.PREARM,
+                               model_attribute='phase', auto_transitions=False,
+                               ignore_invalid_triggers=True, send_event=True,
+                               after_state_change=self._on_phase_changed)
+        # Safety transitions are first, followed by the normal mission path.
+        for source in Phase:
+            if source != Phase.FAULT:
+                self._add_transition(source, Phase.FAULT)
+        for source in (Phase.ARMING, Phase.ARMED):
+            self._add_transition(source, Phase.DISARMING)
+        for source in (Phase.TAKEOFF, Phase.HOVER):
+            self._add_transition(source, Phase.LAND)
+        if mission_kind == 'target-hit':
+            for source in TARGET_PHASES:
+                self._add_transition(source, Phase.LAND)
+                self._add_transition(source, Phase.DISARMING)
+        for source, destination in SHARED_PHASE_EDGES:
+            self._add_transition(source, destination)
+        if mission_kind == 'target-hit':
+            for source, destination in TARGET_PHASE_EDGES:
+                self._add_transition(source, destination)
+
+    def _add_transition(self, source: Phase, destination: Phase) -> None:
+        self.machine.add_transition('resolve', source, destination,
+                                    conditions=self._wants_phase(destination))
+
+    @staticmethod
+    def _wants_phase(destination: Phase):
+        return lambda event: event.model._requested_phase == destination
 
     def _enter(self, phase: Phase, now: float) -> None:
         if phase == self.phase:
             return
-        previous = self.phase
-        self.phase = phase
-        self.entered_at = now
-        if phase == Phase.LAND or (phase == Phase.TAKEOFF and previous != Phase.HOVER):
+        self._requested_phase = phase
+        try:
+            if not self.resolve(now=now):
+                raise ValueError(f'Invalid mission transition: {self.phase.value} -> {phase.value}')
+        finally:
+            self._requested_phase = None
+
+    def _on_phase_changed(self, event) -> None:
+        previous = Phase[event.transition.source]
+        self.entered_at = event.kwargs['now']
+        if self.phase == Phase.LAND or (self.phase == Phase.TAKEOFF and previous != Phase.HOVER):
             self.controller.reset()
             self.last_altitude_at = 0.0
-        if phase == Phase.TAKEOFF:
+        if self.phase == Phase.TAKEOFF:
             self.near_hover_at = None
-        if phase == Phase.LAND:
+        if self.phase == Phase.LAND:
             self.landing_dwell_at = None
 
     @property
@@ -92,7 +154,7 @@ class MissionBase:
             return 1
         if self.phase == Phase.ARMED:
             return 2
-        if self.phase in (Phase.TAKEOFF, Phase.HOVER, Phase.LAND, Phase.SEARCH, Phase.CENTER, Phase.SETTLE, Phase.LOS, Phase.COMMIT):
+        if self.phase in AIRBORNE_PHASES:
             return 3
         if self.phase == Phase.FAULT:
             return 4
@@ -144,15 +206,36 @@ class MissionBase:
 
     def step(self, now: float, altitude_m: float, altitude_at: float,
              firmware_armed: bool, view_alive: bool) -> Command:
-        if not isfinite(altitude_m) or altitude_at <= 0 or altitude_at > now or now - altitude_at > 1.0:
-            raise ValueError('Fresh finite MAVLink altitude required')
+        """Advance one control tick using fresh MAVLink altitude and arm feedback.
+
+        Resolve any permitted phase change, then return the RC command for the
+        resulting phase. ``now`` and ``altitude_at`` use monotonic seconds;
+        ``altitude_m`` is the measured altitude, not height above launch.
+        ``view_alive`` gates manual flight only. Invalid altitude raises
+        ``ValueError`` before the phase or controller is updated.
+        """
+        self._validate_altitude(now, altitude_m, altitude_at)
         if self.entered_at is None:
             self.entered_at = now
-        if self.mode == 'manual' and not view_alive:
-            if self.phase in (Phase.ARMING, Phase.ARMED):
-                self._enter(Phase.DISARMING, now)
-            elif self.phase in (Phase.TAKEOFF, Phase.HOVER, Phase.SEARCH, Phase.CENTER, Phase.SETTLE, Phase.LOS, Phase.COMMIT):
-                self._enter(Phase.LAND, now)
+        self._handle_view_loss(now, view_alive)
+        self._advance_phase(now, altitude_m, altitude_at, firmware_armed)
+        return self._flight_command()
+
+    @staticmethod
+    def _validate_altitude(now: float, altitude_m: float, altitude_at: float) -> None:
+        if not isfinite(altitude_m) or altitude_at <= 0 or altitude_at > now or now - altitude_at > 1.0:
+            raise ValueError('Fresh finite MAVLink altitude required')
+
+    def _handle_view_loss(self, now: float, view_alive: bool) -> None:
+        if self.mode != 'manual' or view_alive:
+            return
+        if self.phase in (Phase.ARMING, Phase.ARMED):
+            self._enter(Phase.DISARMING, now)
+        elif self.phase in AIRBORNE_PHASES - {Phase.LAND}:
+            self._enter(Phase.LAND, now)
+
+    def _advance_phase(self, now: float, altitude_m: float, altitude_at: float,
+                       firmware_armed: bool) -> None:
         elapsed = now - self.entered_at
         if self.phase == Phase.PREARM:
             if firmware_armed:
@@ -171,63 +254,80 @@ class MissionBase:
             if firmware_armed:
                 self.fault('Vehicle armed without App command', now)
         elif self.phase in (Phase.TAKEOFF, Phase.HOVER, Phase.LAND):
-            if not firmware_armed:
-                self.fault('Vehicle unexpectedly disarmed', now)
-            else:
-                target = self.ground_altitude_m + (0.0 if self.phase == Phase.LAND else self.height_m)
-                if altitude_at > self.last_altitude_at:
-                    self.controller.update(target, altitude_m, altitude_at,
-                                           landing=self.phase == Phase.LAND,
-                                           low_height_takeoff=(self.phase == Phase.TAKEOFF
-                                                               and self.height_m < LOW_HEIGHT_TAKEOFF_THRESHOLD_M))
-                    self.last_altitude_at = altitude_at
-                speed = self.controller.speed
-                hover_band = min(0.5, max(0.03, self.height_m * 0.25))
-                near_hover = (self.controller.speed_ready
-                              and abs(altitude_m - (self.ground_altitude_m + self.height_m)) <= hover_band
-                              and abs(speed) <= HOVER_SPEED_M_S)
-                if self.phase == Phase.TAKEOFF:
-                    if near_hover:
-                        if self.near_hover_at is None:
-                            self.near_hover_at = now
-                        elif now - self.near_hover_at >= HOVER_ENTRY_DWELL_S:
-                            self._enter(Phase.HOVER, now)
-                    else:
-                        self.near_hover_at = None
-                elif self.phase == Phase.HOVER:
-                    if not near_hover:
-                        self._enter(Phase.TAKEOFF, now)
-                    elif elapsed >= self.hover_duration_s:
-                        self._on_hover_complete(now)
-                elif self.phase == Phase.LAND:
-                    landed = (self.controller.speed_ready
-                              and abs(altitude_m - self.ground_altitude_m) <= LANDING_HEIGHT_M
-                              and abs(speed) <= LANDING_SPEED_M_S)
-                    if landed:
-                        if self.landing_dwell_at is None:
-                            self.landing_dwell_at = now
-                        elif now - self.landing_dwell_at >= LANDING_DWELL_S:
-                            self._enter(Phase.DISARMING, now)
-                    else:
-                        self.landing_dwell_at = None
-                if self.phase == Phase.TAKEOFF:
-                    limit = max(MIN_PHASE_TIMEOUT_S, PHASE_TIMEOUT_MARGIN_S
-                                + self.height_m / CLIMB_TIMEOUT_SPEED_M_S)
-                elif self.phase == Phase.LAND:
-                    limit = max(MIN_PHASE_TIMEOUT_S, PHASE_TIMEOUT_MARGIN_S
-                                + self.height_m / LAND_TIMEOUT_SPEED_M_S)
-                else:
-                    limit = None
-                if limit is not None and now - self.entered_at > limit:
-                    self.fault(f'{self.phase.value} timed out', now)
+            self._advance_altitude_phase(now, altitude_m, altitude_at, firmware_armed, elapsed)
         elif self.phase == Phase.DISARMING:
             if not firmware_armed:
                 self._enter(Phase.DISARMED, now)
                 self.controller.reset()
             elif elapsed > DISARM_TIMEOUT_S:
                 self.fault('Disarm not confirmed', now)
-        if self.phase in (Phase.TAKEOFF, Phase.HOVER, Phase.LAND, Phase.SEARCH,
-                          Phase.CENTER, Phase.SETTLE, Phase.LOS, Phase.COMMIT):
+
+    def _advance_altitude_phase(self, now: float, altitude_m: float, altitude_at: float,
+                                firmware_armed: bool, elapsed: float) -> None:
+        if not firmware_armed:
+            self.fault('Vehicle unexpectedly disarmed', now)
+            return
+        self._update_altitude_control(altitude_m, altitude_at)
+        if self.phase == Phase.TAKEOFF:
+            self._advance_takeoff(now, altitude_m)
+        elif self.phase == Phase.HOVER:
+            if not self._near_hover(altitude_m):
+                self._enter(Phase.TAKEOFF, now)
+            elif elapsed >= self.hover_duration_s:
+                self._on_hover_complete(now)
+        else:
+            self._advance_landing(now, altitude_m)
+        self._check_phase_timeout(now)
+
+    def _update_altitude_control(self, altitude_m: float, altitude_at: float) -> None:
+        if altitude_at <= self.last_altitude_at:
+            return
+        landing = self.phase == Phase.LAND
+        target = self.ground_altitude_m + (0.0 if landing else self.height_m)
+        self.controller.update(target, altitude_m, altitude_at, landing=landing,
+                               low_height_takeoff=(self.phase == Phase.TAKEOFF
+                                                   and self.height_m < LOW_HEIGHT_TAKEOFF_THRESHOLD_M))
+        self.last_altitude_at = altitude_at
+
+    def _near_hover(self, altitude_m: float) -> bool:
+        hover_band = min(0.5, max(0.03, self.height_m * 0.25))
+        return (self.controller.speed_ready
+                and abs(altitude_m - (self.ground_altitude_m + self.height_m)) <= hover_band
+                and abs(self.controller.speed) <= HOVER_SPEED_M_S)
+
+    def _advance_takeoff(self, now: float, altitude_m: float) -> None:
+        if not self._near_hover(altitude_m):
+            self.near_hover_at = None
+        elif self.near_hover_at is None:
+            self.near_hover_at = now
+        elif now - self.near_hover_at >= HOVER_ENTRY_DWELL_S:
+            self._enter(Phase.HOVER, now)
+
+    def _advance_landing(self, now: float, altitude_m: float) -> None:
+        landed = (self.controller.speed_ready
+                  and abs(altitude_m - self.ground_altitude_m) <= LANDING_HEIGHT_M
+                  and abs(self.controller.speed) <= LANDING_SPEED_M_S)
+        if not landed:
+            self.landing_dwell_at = None
+        elif self.landing_dwell_at is None:
+            self.landing_dwell_at = now
+        elif now - self.landing_dwell_at >= LANDING_DWELL_S:
+            self._enter(Phase.DISARMING, now)
+
+    def _check_phase_timeout(self, now: float) -> None:
+        if self.phase == Phase.TAKEOFF:
+            limit = max(MIN_PHASE_TIMEOUT_S, PHASE_TIMEOUT_MARGIN_S
+                        + self.height_m / CLIMB_TIMEOUT_SPEED_M_S)
+        elif self.phase == Phase.LAND:
+            limit = max(MIN_PHASE_TIMEOUT_S, PHASE_TIMEOUT_MARGIN_S
+                        + self.height_m / LAND_TIMEOUT_SPEED_M_S)
+        else:
+            return
+        if now - self.entered_at > limit:
+            self.fault(f'{self.phase.value} timed out', now)
+
+    def _flight_command(self) -> Command:
+        if self.phase in AIRBORNE_PHASES:
             return Command(self.controller.throttle, True)
         return Command(1000, self.phase in (Phase.ARMING, Phase.ARMED))
 
