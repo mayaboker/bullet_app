@@ -55,3 +55,4 @@
 | [0051 Mission action enum](0051-mission-action-enum.md) | Use App-owned action members for mission requests while preserving MAVLink commands and ACK IDs. | Implemented; 53 tests passed | Pending (no commit requested) |
 | [0052 Mission mode enum](0052-mission-mode-enum.md) | Store approval mode as an App-owned enum while keeping CLI text and MAVLink status values. | Implemented; 54 tests passed | Pending (no commit requested) |
 | [0053 StepContext mission chain](0053-step-context-mission-chain.md) | Pass one StepContext through shared mission tick helpers and hover-completion hooks. | Implemented; 54 tests passed | Pending (no commit requested) |
+| [0054 Rename mission runtime to app](0054-rename-mission-runtime-to-app.md) | Rename the runtime module and update imports and documentation references. | Implemented; 54 tests and CLI help passed | Pending (no commit requested) |

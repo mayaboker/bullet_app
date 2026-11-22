@@ -2,7 +2,7 @@
 
 The `hover-land` mission climbs to a configured height above its launch altitude, stays near that height for a continuous configured interval, then descends and disarms. Bullet App owns the mission state machine and throttle control. Betaflight stabilizes the vehicle from the RC commands that App sends over MSP. The current controller is tuned for SITL.
 
-This guide describes the implementation in [the hover-land mission](../src/bullet_app/missions/hover_land.py), [the shared flight state machine](../src/bullet_app/missions/base.py), and [the App control loop](../src/bullet_app/mission.py). For the complete system diagram, see [mission control loop](mission-control-loop.md).
+This guide describes the implementation in [the hover-land mission](../src/bullet_app/missions/hover_land.py), [the shared flight state machine](../src/bullet_app/missions/base.py), and [the App control loop](../src/bullet_app/app.py). For the complete system diagram, see [mission control loop](mission-control-loop.md).
 
 ## Start and configure
 
@@ -26,7 +26,7 @@ hover_duration_s: 10.0
 
 Use `--mission-config path/to/hover_land.yaml` to load another profile. It must contain exactly `altitude_m` and `hover_duration_s`. Height must be a finite number from 0.1 to 100 m; duration must be finite and greater than zero. View displays the applied height and hover duration, but cannot change the hover-land height during a run. A profile edit takes effect when App starts again.
 
-`--mode manual` is the default and requires View approval for Arm and Start. `--mode auto` asks App to arm when prearm completes, then to start once Betaflight confirms it is armed; it runs one attempt and exits after confirmed disarm or a fault. Auto mode does not require View. A connected View can still request Land or emergency Disarm. See [CLI options](../src/bullet_app/cli.py) and [the auto start logic](../src/bullet_app/mission.py).
+`--mode manual` is the default and requires View approval for Arm and Start. `--mode auto` asks App to arm when prearm completes, then to start once Betaflight confirms it is armed; it runs one attempt and exits after confirmed disarm or a fault. Auto mode does not require View. A connected View can still request Land or emergency Disarm. See [CLI options](../src/bullet_app/cli.py) and [the auto start logic](../src/bullet_app/app.py).
 
 ## Signals and control path
 
@@ -43,7 +43,7 @@ flowchart LR
     MSP -->|"MSP TCP 5761"| FC
 ```
 
-App requests `VFR_HUD` and `ATTITUDE` at 50 Hz. It reads the latest thread-safe telemetry snapshot on each 20 ms loop tick. `HEARTBEAT.base_mode` supplies the observed Betaflight arm state; `VFR_HUD.alt` supplies altitude. At Start, App saves the current altitude as the launch datum. The climb target is **launch datum + `altitude_m`**; the landing target is the launch datum. The hover-land path does not consume camera detections or simulator pose. [The control loop](../src/bullet_app/mission.py) sends RC channels through `beta_client` MSP and publishes its own MAVLink state and fresh telemetry to View through [ViewLink](../src/bullet_app/view_link.py). The View link is separate from the Betaflight telemetry link.
+App requests `VFR_HUD` and `ATTITUDE` at 50 Hz. It reads the latest thread-safe telemetry snapshot on each 20 ms loop tick. `HEARTBEAT.base_mode` supplies the observed Betaflight arm state; `VFR_HUD.alt` supplies altitude. At Start, App saves the current altitude as the launch datum. The climb target is **launch datum + `altitude_m`**; the landing target is the launch datum. The hover-land path does not consume camera detections or simulator pose. [The control loop](../src/bullet_app/app.py) sends RC channels through `beta_client` MSP and publishes its own MAVLink state and fresh telemetry to View through [ViewLink](../src/bullet_app/view_link.py). The View link is separate from the Betaflight telemetry link.
 
 Before connecting View, App queries `MSP_BOARD_INFO` and marks SITL as confirmed only when the board identifier is `SITL`. View shows the red SITL or green HW indicator from this startup check. That indicator describes the detected firmware target; it does not validate the simulator's physics connection.
 
@@ -101,4 +101,4 @@ App puts the resulting throttle on RC channel 3 and arm on AUX1; roll, pitch, an
 
 After a normal landing, manual mode remains in `DISARMED` for another View-approved flight; the next Start captures a new launch datum. Auto mode returns success only after the attempt reaches `DISARMED`. After a fault, it returns failure when the latest Betaflight heartbeat does not indicate armed (including when no heartbeat was received). On loop exit, App tries three additional disarmed, minimum-throttle MSP sends. View reports App phase, arming/readiness, configured height and hover duration through App-originated MAVLink messages.
 
-The safety transitions are implemented in [MissionBase](../src/bullet_app/missions/base.py), the mode and telemetry checks in [run_mission](../src/bullet_app/mission.py), and the View command handling in [ViewLink](../src/bullet_app/view_link.py).
+The safety transitions are implemented in [MissionBase](../src/bullet_app/missions/base.py), the mode and telemetry checks in [run_mission](../src/bullet_app/app.py), and the View command handling in [ViewLink](../src/bullet_app/view_link.py).

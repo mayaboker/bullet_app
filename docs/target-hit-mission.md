@@ -15,7 +15,7 @@ cd /home/user/projects/bullet_app
 uv run --locked bullet-app --mission target-hit --mode manual
 ```
 
-`--mode auto` asks App to arm and start one attempt when its feedback and TIMESYNC gates permit; it does not require View. `--mode manual` is the default and requires View approval. Both modes allow only **one target attempt per App process**, so restart App and the launcher for another attempt. A connected View can request an early Land or emergency Disarm. See [CLI options](../src/bullet_app/cli.py) and [automatic start handling](../src/bullet_app/mission.py).
+`--mode auto` asks App to arm and start one attempt when its feedback and TIMESYNC gates permit; it does not require View. `--mode manual` is the default and requires View approval. Both modes allow only **one target attempt per App process**, so restart App and the launcher for another attempt. A connected View can request an early Land or emergency Disarm. See [CLI options](../src/bullet_app/cli.py) and [automatic start handling](../src/bullet_app/app.py).
 
 The startup height defaults to **10 m above the altitude measured at Start**; the pre-search hover is fixed at **5 s**. In manual mode, View can apply a height from **0.1 to 100 m** while disarmed or armed idle, before Start. Height cannot change after Start. The `--mission-config` option selects a [LOS navigator profile](../../los_tracking/examples/bullet_profile.yaml) with camera calibration, vehicle limits, sensor freshness, and guidance tuning. Its `target_altitude_m` is a navigator setting, **not** the startup takeoff height. The View slider changes the latter without editing the profile file.
 
@@ -33,7 +33,7 @@ flowchart LR
     MISSION -->|"RC over MSP TCP :5761"| FC
 ```
 
-On each tick, [the App loop](../src/bullet_app/mission.py) places the latest immutable MAVLink snapshot on the process-wide [blackboard](../src/bullet_app/blackboard.py), polls target inputs and View commands, then calls `mission.step(StepContext(blackboard, now_s))`. The MAVLink receiver supplies locally timestamped Betaflight feedback; it does not supply simulator pose. App requests `ATTITUDE` and `VFR_HUD` at 50 Hz and enables MAVLink `TIMESYNC` for this mission. `HEARTBEAT.base_mode` supplies observed arm state and `VFR_HUD.alt` supplies altitude.
+On each tick, [the App loop](../src/bullet_app/app.py) places the latest immutable MAVLink snapshot on the process-wide [blackboard](../src/bullet_app/blackboard.py), polls target inputs and View commands, then calls `mission.step(StepContext(blackboard, now_s))`. The MAVLink receiver supplies locally timestamped Betaflight feedback; it does not supply simulator pose. App requests `ATTITUDE` and `VFR_HUD` at 50 Hz and enables MAVLink `TIMESYNC` for this mission. `HEARTBEAT.base_mode` supplies observed arm state and `VFR_HUD.alt` supplies altitude.
 
 [TargetIngress](../src/bullet_app/ingress.py) subscribes to detector boxes on `tracking/front/bbox` and validated contact on the scenario contact topic. `TargetMission.observe_bbox()` accepts only a recent packet (at most **0.2 s** old) for `camera/front/image`, `drone_1`, the configured image dimensions, a valid session and sequence, and a valid box or `null`. Accepted boxes retain their camera capture timestamp. A missing box is valid detector output and sends search back to its sweep behavior. If a packet has a frame `fid`, App forwards the accepted box to View, which overlays it only on the matching locally received image. App does not receive the camera image through this path.
 

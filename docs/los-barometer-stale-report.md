@@ -12,7 +12,7 @@ The estimator advances on a 20 ms grid. Its previous implementation inspected on
 
 The [sensor estimator](../src/bullet_app/sensor_estimator.py) now interpolates between received measurements when the newest one lies after the tick. It applies this to barometer and attitude, and keeps the existing 60 ms source prediction limit. It counts barometer interpolation and missing ticks.
 
-The [App loop](../src/bullet_app/mission.py) logs those counters at INFO once per second during LOS. An LOS fault is logged once at WARNING with the raw source ages, navigator ages, tick lag, interpolation count, and missing count. The [target mission](../src/bullet_app/missions/target_hit.py) also reports ATTITUDE clock-mapping age and rejection count. Normal LOS state changes remain at INFO; there is no per-sample warning flood.
+The [App loop](../src/bullet_app/app.py) logs those counters at INFO once per second during LOS. An LOS fault is logged once at WARNING with the raw source ages, navigator ages, tick lag, interpolation count, and missing count. The [target mission](../src/bullet_app/missions/target_hit.py) also reports ATTITUDE clock-mapping age and rejection count. Normal LOS state changes remain at INFO; there is no per-sample warning flood.
 
 ## Verification and clock follow-up
 

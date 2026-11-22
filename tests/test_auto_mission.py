@@ -6,7 +6,7 @@ from pymavlink.dialects.v20 import common
 
 from bullet_app.cli import AppOptions, CliParser, DEFAULT_TARGET_PROFILE
 from bullet_app.flight import Action, Command, FlightMission, Mode, Phase
-from bullet_app.mission import _advance_automatic_start, _automatic_result, _send_command
+from bullet_app.app import _advance_automatic_start, _automatic_result, _send_command
 from bullet_app.missions import create_mission
 from bullet_app.missions.hover_land import HoverLandSettings
 from bullet_app.view_link import SITL_CONFIRMED_CUSTOM_MODE, ViewLink, _command

@@ -13,7 +13,7 @@ flowchart LR
 
     subgraph App["Bullet App"]
         Entry["main.py + CLI<br/>logging and options"]
-        Runner["mission.py<br/>run_mission, 50 Hz"]
+        Runner["app.py<br/>run_mission, 50 Hz"]
         Telemetry["beta_client<br/>MAVLink receiver thread"]
         Blackboard["Process-wide blackboard<br/>MAVLink, visual, target features"]
         Context["StepContext<br/>blackboard + monotonic time"]
@@ -87,4 +87,4 @@ The loop faults if the vehicle heartbeat is older than 3 seconds or altitude rem
 - **Target-hit:** the same initial phases lead from hover to search → center → settle → LOS → commit. A confirmed contact disarms with a hit result; search or guidance failures lead to landing. Its estimator and navigator are active for the target path.
 - **Shutdown:** auto mode returns after the completed attempt or fault once disarmed; manual mode remains available after a normal landing. When the loop exits, its `finally` block attempts three disarmed minimum-throttle MSP commands before closing resources.
 
-The diagram follows [the loop](../src/bullet_app/mission.py), [the shared mission state machine](../src/bullet_app/missions/base.py), [the target mission](../src/bullet_app/missions/target_hit.py), [the View link](../src/bullet_app/view_link.py), and [target input handling](../src/bullet_app/ingress.py).
+The diagram follows [the loop](../src/bullet_app/app.py), [the shared mission state machine](../src/bullet_app/missions/base.py), [the target mission](../src/bullet_app/missions/target_hit.py), [the View link](../src/bullet_app/view_link.py), and [target input handling](../src/bullet_app/ingress.py).

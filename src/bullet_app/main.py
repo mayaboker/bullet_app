@@ -3,7 +3,7 @@ import click
 from loguru import logger
 
 from .cli import CliParser
-from .mission import run_mission
+from .app import run_mission
 from .run_logging import configure_logging
 
 
