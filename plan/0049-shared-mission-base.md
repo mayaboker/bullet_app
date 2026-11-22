@@ -10,4 +10,4 @@ Verification: Focused mission and View tests passed (29 tests). The full App sui
 
 Scope/defaults: Preserve existing flight behavior and uncommitted work. Keep shared phase definitions and IDs stable for the View protocol.
 
-Status: Implemented and verified. Implementation commit: Pending (no commit requested).
+Status: Implemented and verified. Implementation commit: `fae543009b6ec8b0984131bde59e5ecf0ea1ff99`.

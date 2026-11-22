@@ -10,4 +10,4 @@ Verification: Compared the phase and control descriptions with the CLI, mission 
 
 Scope/defaults: Describe current SITL behavior, including the packaged 20 m and 10 s profile and both manual and auto approval modes. Distinguish Betaflight feedback from App-to-View status.
 
-Status: Implemented; documentation verified. Implementation commit: Pending.
+Status: Implemented; documentation verified. Implementation commits: `b6fd6f7dfe53c1766f02ac2f0653d32f8ba16c91`, `fae543009b6ec8b0984131bde59e5ecf0ea1ff99` (follow-up).

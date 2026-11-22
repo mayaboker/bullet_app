@@ -10,4 +10,4 @@ Verification: Compared both diagrams and the phase, timing, and failure descript
 
 Scope/defaults: Describe the current hover-land and target-hit missions, the separate MAVLink/MSP/View links, and direct simulation contact input without suggesting App receives simulation ground truth. Leave plan 0043 and application code unchanged.
 
-Status: Implemented; documentation verified. Implementation commit: Pending.
+Status: Implemented; documentation verified. Implementation commits: `b6fd6f7dfe53c1766f02ac2f0653d32f8ba16c91`, `fae543009b6ec8b0984131bde59e5ecf0ea1ff99` (follow-up).

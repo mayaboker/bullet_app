@@ -10,4 +10,4 @@ Verification: The pre-refactor focused baseline was 21 passing mission tests. Af
 
 Scope/defaults: Refactor both hover-land and target-hit. Preserve thresholds, controller gains, approval modes, synchronous request handling, and error messages. Use an ordered `resolve()` trigger with explicit transition priority.
 
-Status: Implemented; tests and locked dependency check passed. Implementation commit: Pending.
+Status: Implemented; tests and locked dependency check passed. Implementation commits: `b6fd6f7dfe53c1766f02ac2f0653d32f8ba16c91`, `fae543009b6ec8b0984131bde59e5ecf0ea1ff99` (follow-up).

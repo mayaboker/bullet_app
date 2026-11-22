@@ -10,4 +10,4 @@ Verification: The App suite passed (52 tests), including readiness value and typ
 
 Scope/defaults: Keep the enum in Bullet App. Bullet View defines its own local interpretation of the numeric MAVLink contract; no `bullet_msgs` flight-control helper is shared between the two programs. Preserve existing uncommitted App changes.
 
-Status: Implemented and verified. Implementation commit: Pending (no commit requested).
+Status: Implemented and verified. Implementation commit: `fae543009b6ec8b0984131bde59e5ecf0ea1ff99`.

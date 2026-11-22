@@ -10,4 +10,4 @@ Verification: Compared phase transitions, timing thresholds, input validation, a
 
 Scope/defaults: Document the current red-truck SITL path and both approval modes. Distinguish detector boxes, MAVLink feedback, and simulator contact; do not describe future recording work as implemented.
 
-Status: Implemented; documentation verified. Implementation commit: Pending.
+Status: Implemented; documentation verified. Implementation commit: `fae543009b6ec8b0984131bde59e5ecf0ea1ff99`.

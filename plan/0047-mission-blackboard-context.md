@@ -10,4 +10,4 @@ Verification: The full App suite passed with 45 tests, including new singleton r
 
 Scope/defaults: One process-global board reset at each `run_mission` entry and shared across manual flights. Use existing `TelemetrySnapshot` and current target-derived outputs; do not add a generic feature store or move sensor conditions into state-machine guards.
 
-Status: Implemented; tests and locked dependency check passed. Implementation commit: Pending.
+Status: Implemented; tests and locked dependency check passed. Implementation commit: `fae543009b6ec8b0984131bde59e5ecf0ea1ff99`.
