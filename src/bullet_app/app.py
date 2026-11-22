@@ -83,16 +83,19 @@ def _open_mavlink(config: AppConfig) -> MavlinkTelemetry:
     return MavlinkTelemetry(config.mavlink.endpoint, baud=config.mavlink.baudrate)
 
 
-def _open_target_inputs(options, config: AppConfig, resources: ExitStack):
-    """Open tracker input and opt-in simulator contact for target-hit only."""
+def _open_tracker(options, resources: ExitStack):
+    """Open the target tracker when the selected mission uses boxes."""
     if options.mission != 'target-hit':
-        return None, None
-    tracker = resources.enter_context(TrackerSubscriber(options.bbox_endpoint))
-    if not config.simulation.enabled:
-        return tracker, None
+        return None
+    return resources.enter_context(TrackerSubscriber(options.bbox_endpoint))
+
+
+def _open_simulation(options, config: AppConfig, resources: ExitStack):
+    """Open simulator contact only when enabled for target-hit."""
+    if options.mission != 'target-hit' or not config.simulation.enabled:
+        return None
     from .simulation import SimulationContactSubscriber
-    simulation = resources.enter_context(SimulationContactSubscriber(config.simulation.contact_endpoint))
-    return tracker, simulation
+    return resources.enter_context(SimulationContactSubscriber(config.simulation.contact_endpoint))
 
 
 def _collect_inputs(mission, context: StepContext, tracker, simulation, view) -> None:
@@ -104,8 +107,8 @@ def _collect_inputs(mission, context: StepContext, tracker, simulation, view) ->
         for bbox in tracker.poll():
             if mission.observe_bbox(bbox, now):
                 view.publish_bbox(blackboard.visual.bbox)
-        if simulation is not None:
-            mission.observe_simulation_contact(simulation.poll())
+    if simulation is not None:
+        mission.observe_simulation_contact(simulation.poll())
     view.poll(mission, context)
     blackboard.view_alive = view.view_alive(now)
 
@@ -132,26 +135,31 @@ def _step_with_safety(mission, context: StepContext, connected_at: float) -> Com
         return Command(THROTTLE_MIN, False)
 
 
+# application entry point for the standalone flight mission
 def run_mission(options) -> int:
     """Run one auto flight or serve repeated View-approved flights."""
     config = AppConfig.from_yaml(options.config).with_overrides(
         msp_host=options.msp_host, msp_port=options.msp_port,
         mavlink_endpoint=options.mavlink_endpoint,
         contact_endpoint=options.contact_endpoint)
-    blackboard = Blackboard()
-    blackboard.reset()
+    blackboard = _init_blackboard()
     mission = create_mission(options, blackboard)
+
     with ExitStack() as resources:
         telemetry = resources.enter_context(_open_mavlink(config))
         telemetry.set_message_rate(mavutil.mavlink.MAVLINK_MSG_ID_VFR_HUD, TELEMETRY_RATE_HZ)
         telemetry.set_message_rate(mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, TELEMETRY_RATE_HZ)
         if options.mission == 'target-hit':
             telemetry.enable_timesync()
+
         transport = resources.enter_context(_open_msp(config))
         sitl_confirmed = _confirm_sitl(transport)
+
         view = resources.enter_context(ViewLink())
         view.sitl_confirmed = sitl_confirmed
-        tracker, simulation = _open_target_inputs(options, config, resources)
+
+        tracker = _open_tracker(options, resources)
+        simulation = _open_simulation(options, config, resources)
         try:
             connected_at = time.monotonic()
             next_tick = connected_at
@@ -183,3 +191,9 @@ def run_mission(options) -> int:
                     _send_command(transport, Command(THROTTLE_MIN, False))
                 except OSError:
                     break
+
+
+def _init_blackboard():
+    blackboard = Blackboard()
+    blackboard.reset()
+    return blackboard

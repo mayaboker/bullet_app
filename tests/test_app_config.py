@@ -41,7 +41,7 @@ def test_sitl_config_enables_contact_and_cli_override_requires_yaml_gate():
         AppConfig.from_yaml(DEFAULT_CONFIG).with_overrides(contact_endpoint='tcp://127.0.0.1:6000')
 
 
-def test_disabled_simulation_opens_tracker_without_loading_simulation(monkeypatch):
+def test_tracker_opens_independently_of_disabled_simulation(monkeypatch):
     events = []
 
     class Tracker:
@@ -57,13 +57,14 @@ def test_disabled_simulation_opens_tracker_without_loading_simulation(monkeypatc
     monkeypatch.setattr(app, 'TrackerSubscriber', Tracker)
     options = SimpleNamespace(mission='target-hit', bbox_endpoint='tcp://127.0.0.1:5560')
     with ExitStack() as resources:
-        tracker, simulation = app._open_target_inputs(options, AppConfig.from_yaml(DEFAULT_CONFIG), resources)
+        tracker = app._open_tracker(options, resources)
+        simulation = app._open_simulation(options, AppConfig.from_yaml(DEFAULT_CONFIG), resources)
         assert isinstance(tracker, Tracker) and simulation is None
         assert events == [('tracker', 'tcp://127.0.0.1:5560')]
     assert events[-1] == 'tracker closed'
 
 
-def test_sitl_opens_contact_only_for_target_hit(monkeypatch):
+def test_sitl_opens_contact_separately_only_for_target_hit(monkeypatch):
     from bullet_app import simulation
 
     events = []
@@ -82,11 +83,12 @@ def test_sitl_opens_contact_only_for_target_hit(monkeypatch):
     monkeypatch.setattr(simulation, 'SimulationContactSubscriber', Subscriber)
     config = AppConfig.from_yaml(DEFAULT_CONFIG.with_name('app.sitl.yaml'))
     with ExitStack() as resources:
-        assert app._open_target_inputs(SimpleNamespace(mission='hover-land'), config, resources) == (None, None)
+        assert app._open_tracker(SimpleNamespace(mission='hover-land'), resources) is None
+        assert app._open_simulation(SimpleNamespace(mission='hover-land'), config, resources) is None
         assert events == []
-        tracker, contact = app._open_target_inputs(
-            SimpleNamespace(mission='target-hit', bbox_endpoint='tcp://127.0.0.1:5560'),
-            config, resources)
+        options = SimpleNamespace(mission='target-hit', bbox_endpoint='tcp://127.0.0.1:5560')
+        tracker = app._open_tracker(options, resources)
+        contact = app._open_simulation(options, config, resources)
         assert isinstance(tracker, Subscriber) and isinstance(contact, Subscriber)
     assert events == ['tcp://127.0.0.1:5560', 'tcp://127.0.0.1:5555']
 

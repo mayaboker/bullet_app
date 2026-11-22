@@ -62,3 +62,4 @@
 | [0058 Open MAVLink helper](0058-open-mavlink-helper.md) | Make TCP and serial MAVLink construction explicit beside the MSP helper. | Implemented; 65 tests passed | Pending (no commit requested) |
 | [0059 Target tracking-log ownership](0059-target-tracking-log-ownership.md) | Move tracking-log state into TargetMission and observe commands after MSP send. | Implemented; 68 tests passed | Pending (no commit requested) |
 | [0060 Separate tracker and simulation inputs](0060-separate-tracker-simulation.md) | Split tracker boxes from optional simulator contact and gate contact through YAML. | Implemented; 77 tests passed | Pending (no commit requested) |
+| [0061 Independent input openers](0061-independent-input-openers.md) | Give tracker and optional simulation contact separate App setup paths. | Implemented; 78 tests passed | Pending (no commit requested) |

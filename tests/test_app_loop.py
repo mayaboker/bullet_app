@@ -4,10 +4,22 @@ from types import SimpleNamespace
 import pytest
 
 from bullet_app import app
-from bullet_app.blackboard import StepContext
+from bullet_app.blackboard import Blackboard, StepContext
 from bullet_app.config import DEFAULT_CONFIG
 from bullet_app.missions import Command, Mode, Phase
 from bullet_app.runtime_diagnostics import RuntimeDiagnostics
+
+
+def test_simulation_contact_is_polled_independently_of_tracker():
+    events = []
+    contact = {'target_id': 'red_truck', 'drone_id': 'drone_1'}
+    mission = SimpleNamespace(observe_simulation_contact=lambda value: events.append(value))
+    simulation = SimpleNamespace(poll=lambda: contact)
+    view = SimpleNamespace(poll=lambda *_: None, view_alive=lambda _: True)
+    board = Blackboard()
+    app._collect_inputs(mission, StepContext(board, 1.0), None, simulation, view)
+    assert events == [contact]
+    assert board.view_alive
 
 
 def test_stale_telemetry_faults_and_uses_safe_command():
