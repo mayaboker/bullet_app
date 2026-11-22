@@ -21,3 +21,9 @@ betaflight:
     endpoint: tcp:127.0.0.1:5762
     # Serial MAVLink baud rate in bits/s; ignored for a TCP endpoint.
     baudrate: 57600
+# Simulator target contact is optional; hardware runs leave this disabled.
+simulation:
+  # Set true only when a simulator publishes target contact events; default if omitted: false.
+  enabled: false
+  # ZeroMQ contact publisher endpoint; used only when simulation.enabled is true.
+  contact_endpoint: tcp://127.0.0.1:5555

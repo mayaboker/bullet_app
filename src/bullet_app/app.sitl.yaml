@@ -1,0 +1,24 @@
+# Betaflight SITL links for target-hit flights with simulator contact.
+betaflight:
+  # MSP carries RC commands and board identity.
+  msp:
+    # TCP selects the SITL MSP listener; serial is also supported by App.
+    type: tcp
+    # MSP listener host; used for TCP.
+    host: 127.0.0.1
+    # MSP listener port (1–65535); used for TCP.
+    port: 5761
+  # MAVLink carries telemetry and TIMESYNC.
+  mavlink:
+    # TCP selects the SITL MAVLink listener; serial is also supported by App.
+    type: tcp
+    # TCP endpoint in tcp:host:port format.
+    endpoint: tcp:127.0.0.1:5762
+    # Baud rate in bits/s; ignored for TCP.
+    baudrate: 57600
+# Enable simulator-only target contact for SITL missions.
+simulation:
+  # True subscribes to contact for target-hit; false disables it.
+  enabled: true
+  # ZeroMQ endpoint for simulator contact events; required when enabled.
+  contact_endpoint: tcp://127.0.0.1:5555

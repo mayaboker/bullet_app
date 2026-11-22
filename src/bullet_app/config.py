@@ -4,6 +4,7 @@ from enum import Enum
 from pathlib import Path
 
 import yaml
+from bullet_simulation_protocol import validate_endpoint
 
 DEFAULT_CONFIG = Path(__file__).with_name('app.yaml')
 DEFAULT_MAVLINK_BAUDRATE = 57600
@@ -31,15 +32,22 @@ class MavlinkConnection:
 
 
 @dataclass(frozen=True, slots=True)
+class SimulationConfig:
+    enabled: bool = False
+    contact_endpoint: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     msp: MspConnection
     mavlink: MavlinkConnection
+    simulation: SimulationConfig = SimulationConfig()
 
     @classmethod
     def from_yaml(cls, path: Path) -> 'AppConfig':
         """Read selected connection settings before any device is opened."""
         data = yaml.safe_load(path.read_text())
-        root = _mapping(data, 'config', {'betaflight'}, {'betaflight'})
+        root = _mapping(data, 'config', {'betaflight', 'simulation'}, {'betaflight'})
         betaflight = _mapping(root['betaflight'], 'betaflight', {'msp', 'mavlink'}, {'msp', 'mavlink'})
         msp_data = _mapping(betaflight['msp'], 'betaflight.msp',
                             {'type', 'host', 'port', 'device', 'baudrate'}, {'type'})
@@ -54,10 +62,16 @@ class AppConfig:
                                     mavlink_data.get('baudrate', DEFAULT_MAVLINK_BAUDRATE))
         _validate_msp(msp)
         _validate_mavlink(mavlink)
-        return cls(msp, mavlink)
+        simulation_data = (_mapping(root['simulation'], 'simulation',
+                                    {'enabled', 'contact_endpoint'}, {'enabled'})
+                           if 'simulation' in root else None)
+        simulation = SimulationConfig(**simulation_data) if simulation_data is not None else SimulationConfig()
+        _validate_simulation(simulation)
+        return cls(msp, mavlink, simulation)
 
     def with_overrides(self, *, msp_host: str | None = None, msp_port: int | None = None,
-                       mavlink_endpoint: str | None = None) -> 'AppConfig':
+                       mavlink_endpoint: str | None = None,
+                       contact_endpoint: str | None = None) -> 'AppConfig':
         """Apply explicit CLI endpoints after loading and validating YAML."""
         if self.msp.type is ConnectionType.SERIAL and (msp_host is not None or msp_port is not None):
             raise ValueError('--msp-host and --msp-port require TCP MSP')
@@ -68,7 +82,22 @@ class AppConfig:
                           endpoint=self.mavlink.endpoint if mavlink_endpoint is None else mavlink_endpoint)
         _validate_msp(msp)
         _validate_mavlink(mavlink)
-        return AppConfig(msp, mavlink)
+        if contact_endpoint is not None and not self.simulation.enabled:
+            raise ValueError('--contact-endpoint requires simulation.enabled: true')
+        simulation = (replace(self.simulation, contact_endpoint=contact_endpoint)
+                      if contact_endpoint is not None else self.simulation)
+        _validate_simulation(simulation)
+        return AppConfig(msp, mavlink, simulation)
+
+
+def _validate_simulation(simulation: SimulationConfig) -> None:
+    if type(simulation.enabled) is not bool:
+        raise ValueError('simulation.enabled must be true or false')
+    if simulation.enabled:
+        _nonempty(simulation.contact_endpoint, 'simulation.contact_endpoint')
+        validate_endpoint(simulation.contact_endpoint)
+    elif simulation.contact_endpoint is not None:
+        _nonempty(simulation.contact_endpoint, 'simulation.contact_endpoint')
 
 
 def _mapping(value, name: str, allowed: set[str], required: set[str]) -> dict:

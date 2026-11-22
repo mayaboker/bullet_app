@@ -10,7 +10,7 @@ def test_process_singleton_reset_clears_observations():
     board = Blackboard()
     assert Blackboard() is board
     board.visual.bbox = {'capture_ns': 123, 'bbox': None}
-    board.visual.contact = True
+    board.simulation.target_contact = True
     board.features.navigation_input = object()
     board.features.navigation_result = object()
     board.view_alive = True
@@ -18,7 +18,7 @@ def test_process_singleton_reset_clears_observations():
     board.reset()
 
     assert board.telemetry == TelemetrySnapshot()
-    assert board.visual.bbox is None and not board.visual.contact
+    assert board.visual.bbox is None and not board.simulation.target_contact
     assert board.features.navigation_input is None
     assert board.features.navigation_result is None
     assert not board.view_alive

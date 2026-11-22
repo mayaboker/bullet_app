@@ -12,7 +12,7 @@ To run App after starting the target scene and Bullet Visual separately:
 
 ```sh
 cd /home/user/projects/bullet_app
-uv run --locked bullet-app --mission target-hit --mode manual
+uv run --locked bullet-app --config src/bullet_app/app.sitl.yaml --mission target-hit --mode manual
 ```
 
 `--mode auto` asks App to arm and start one attempt when its feedback and TIMESYNC gates permit; it does not require View. `--mode manual` is the default and requires View approval. Both modes allow only **one target attempt per App process**, so restart App and the launcher for another attempt. A connected View can request an early Land or emergency Disarm. See [CLI options](../src/bullet_app/cli.py) and [automatic start handling](../src/bullet_app/app.py).
@@ -27,7 +27,7 @@ flowchart LR
     VIS["Bullet Visual"] -->|"ZMQ bbox :5560"| APP
     HIT["Simulation contact publisher"] -->|"ZMQ contact :5555"| APP
     VIEW["Bullet View"] <-->|"MAVLink UDP :14550<br/>commands, ACKs, state"| APP
-    APP --> BB["Blackboard<br/>MAVLink, accepted bbox/contact,<br/>navigation inputs/results"]
+    APP --> BB["Blackboard<br/>MAVLink, visual bbox, simulation contact,<br/>navigation inputs/results"]
     BB --> CTX["StepContext<br/>blackboard + monotonic now"]
     CTX --> MISSION["TargetMission + MissionBase"]
     MISSION -->|"RC over MSP TCP :5761"| FC
@@ -35,9 +35,9 @@ flowchart LR
 
 On each tick, [the App loop](../src/bullet_app/app.py) places the latest immutable MAVLink snapshot on the process-wide [blackboard](../src/bullet_app/blackboard.py), polls target inputs and View commands, then calls `mission.step(StepContext(blackboard, now_s))`. The MAVLink receiver supplies locally timestamped Betaflight feedback; it does not supply simulator pose. App requests `ATTITUDE` and `VFR_HUD` at 50 Hz and enables MAVLink `TIMESYNC` for this mission. `HEARTBEAT.base_mode` supplies observed arm state and `VFR_HUD.alt` supplies altitude.
 
-[TargetIngress](../src/bullet_app/ingress.py) subscribes to detector boxes on `tracking/front/bbox` and validated contact on the scenario contact topic. `TargetMission.observe_bbox()` accepts only a recent packet (at most **0.2 s** old) for `camera/front/image`, `drone_1`, the configured image dimensions, a valid session and sequence, and a valid box or `null`. Accepted boxes retain their camera capture timestamp. A missing box is valid detector output and sends search back to its sweep behavior. If a packet has a frame `fid`, App forwards the accepted box to View, which overlays it only on the matching locally received image. App does not receive the camera image through this path.
+[TrackerSubscriber](../src/bullet_app/tracker.py) subscribes to detector boxes on `tracking/front/bbox`. [SimulationContactSubscriber](../src/bullet_app/simulation.py) subscribes to validated scenario contact only when `simulation.enabled: true` in YAML and target-hit is selected. The bundled [default config](../src/bullet_app/app.yaml) disables it; the [SITL config](../src/bullet_app/app.sitl.yaml) enables it. `--contact-endpoint` overrides the enabled simulation endpoint but cannot enable simulation by itself. `TargetMission.observe_bbox()` accepts only a recent packet (at most **0.2 s** old) for `camera/front/image`, `drone_1`, the configured image dimensions, a valid session and sequence, and a valid box or `null`. Accepted boxes retain their camera capture timestamp. A missing box is valid detector output and sends search back to its sweep behavior. If a packet has a frame `fid`, App forwards the accepted box to View, which overlays it only on the matching locally received image. App does not receive the camera image through this path.
 
-The mission accepts a validated contact only for `red_truck` and `drone_1` while in Search, Center, Settle, LOS, or Commit. The blackboard keeps accepted box/contact and the current target navigation input/result; the estimator and phase timers remain on the mission. Contact before the target phases does not complete the mission.
+The mission accepts a validated contact only for `red_truck` and `drone_1` while in Search, Center, Settle, LOS, or Commit. The blackboard keeps accepted boxes in `visual`, contact in `simulation`, and the current target navigation input/result in `features`; the estimator and phase timers remain on the mission. Contact before the target phases does not complete the mission. Without simulator contact, Commit times out after 3 seconds and lands with `contact not confirmed`.
 
 ## Flight and guidance phases
 
@@ -84,4 +84,4 @@ The [target sensor estimator](../src/bullet_app/sensor_estimator.py) runs on a 2
 - **TIMESYNC:** Arm and Start require fresh sync. If sync remains unavailable for 5 s during prearm/disarmed startup, App faults. Losing sync while arming or armed idle disarms; losing it airborne records failure and lands. Detector boxes are *not* required before Arm or Start, although View reports visual-feed freshness.
 - **View and Betaflight loss:** In manual mode, losing View while armed idle disarms and losing it airborne lands. Stale Betaflight heartbeat or altitude faults the App and sends minimum-throttle disarmed RC. Emergency Disarm also faults and requires restart.
 
-App publishes its phase, result, applied height, hover duration, arm/readiness feedback, and fresh telemetry to View over its separate MAVLink UDP link. `TrackingLog` records target-stage changes and bounded 5 Hz checkpoints, including bbox age, sensor alignment, LOS stage, guidance demand, and sent RC values; it is diagnostic output, not a control input. See [ViewLink](../src/bullet_app/view_link.py) and [tracking diagnostics](../src/bullet_app/tracking_log.py).
+App publishes its phase, result, applied height, hover duration, arm/readiness feedback, and fresh telemetry to View over its separate MAVLink UDP link. `TargetMission` owns `TrackingLog`, which observes the RC command after App sends it. It records target-stage changes and bounded 5 Hz checkpoints, including bbox age, sensor alignment, LOS stage, guidance demand, and sent RC values; it is diagnostic output, not a control input. See [ViewLink](../src/bullet_app/view_link.py) and [tracking diagnostics](../src/bullet_app/tracking_log.py).

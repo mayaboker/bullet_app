@@ -249,6 +249,10 @@ class MissionBase:
         self._advance_phase(context)
         return self._flight_command()
 
+    def on_command_sent(self, context: StepContext, command: Command) -> None:
+        """Let a mission observe the RC command after App sends it."""
+        pass
+
     @staticmethod
     def _validate_altitude(context: StepContext) -> None:
         """Require a finite altitude received within the last monotonic second."""

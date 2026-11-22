@@ -1,4 +1,7 @@
 """Betaflight TCP and serial configuration before opening connections."""
+from contextlib import ExitStack
+from types import SimpleNamespace
+
 import pytest
 
 from bullet_app import app
@@ -25,6 +28,76 @@ def test_packaged_config_keeps_existing_tcp_connections():
     assert (config.msp.type, config.msp.host, config.msp.port) == (ConnectionType.TCP, '127.0.0.1', 5761)
     assert (config.mavlink.type, config.mavlink.endpoint, config.mavlink.baudrate) == (
         ConnectionType.TCP, 'tcp:127.0.0.1:5762', 57600)
+    assert not config.simulation.enabled
+
+
+def test_sitl_config_enables_contact_and_cli_override_requires_yaml_gate():
+    sitl = AppConfig.from_yaml(DEFAULT_CONFIG.with_name('app.sitl.yaml'))
+    assert sitl.simulation.enabled
+    assert sitl.simulation.contact_endpoint == 'tcp://127.0.0.1:5555'
+    assert sitl.with_overrides(contact_endpoint='tcp://127.0.0.1:6000').simulation.contact_endpoint == (
+        'tcp://127.0.0.1:6000')
+    with pytest.raises(ValueError, match='requires simulation.enabled'):
+        AppConfig.from_yaml(DEFAULT_CONFIG).with_overrides(contact_endpoint='tcp://127.0.0.1:6000')
+
+
+def test_disabled_simulation_opens_tracker_without_loading_simulation(monkeypatch):
+    events = []
+
+    class Tracker:
+        def __init__(self, endpoint):
+            events.append(('tracker', endpoint))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            events.append('tracker closed')
+
+    monkeypatch.setattr(app, 'TrackerSubscriber', Tracker)
+    options = SimpleNamespace(mission='target-hit', bbox_endpoint='tcp://127.0.0.1:5560')
+    with ExitStack() as resources:
+        tracker, simulation = app._open_target_inputs(options, AppConfig.from_yaml(DEFAULT_CONFIG), resources)
+        assert isinstance(tracker, Tracker) and simulation is None
+        assert events == [('tracker', 'tcp://127.0.0.1:5560')]
+    assert events[-1] == 'tracker closed'
+
+
+def test_sitl_opens_contact_only_for_target_hit(monkeypatch):
+    from bullet_app import simulation
+
+    events = []
+
+    class Subscriber:
+        def __init__(self, endpoint):
+            events.append(endpoint)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+    monkeypatch.setattr(app, 'TrackerSubscriber', Subscriber)
+    monkeypatch.setattr(simulation, 'SimulationContactSubscriber', Subscriber)
+    config = AppConfig.from_yaml(DEFAULT_CONFIG.with_name('app.sitl.yaml'))
+    with ExitStack() as resources:
+        assert app._open_target_inputs(SimpleNamespace(mission='hover-land'), config, resources) == (None, None)
+        assert events == []
+        tracker, contact = app._open_target_inputs(
+            SimpleNamespace(mission='target-hit', bbox_endpoint='tcp://127.0.0.1:5560'),
+            config, resources)
+        assert isinstance(tracker, Subscriber) and isinstance(contact, Subscriber)
+    assert events == ['tcp://127.0.0.1:5560', 'tcp://127.0.0.1:5555']
+
+
+@pytest.mark.parametrize('settings', ('enabled: yes', 'enabled: true',
+                                      'enabled: true\n  contact_endpoint: bad'))
+def test_simulation_config_rejects_invalid_settings(tmp_path, settings):
+    path = tmp_path / 'app.yaml'
+    path.write_text(SERIAL_CONFIG + 'simulation:\n  ' + settings + '\n')
+    with pytest.raises(ValueError):
+        AppConfig.from_yaml(path)
 
 
 def test_serial_config_selects_each_betaflight_link(tmp_path, monkeypatch):

@@ -7,9 +7,32 @@ from loguru import logger
 
 from bullet_app.missions import Command, Phase
 from bullet_app.blackboard import Blackboard, StepContext
+from bullet_app.cli import DEFAULT_TARGET_PROFILE
+from bullet_app.flight import FlightMission
 from bullet_app.run_logging import configure_logging
+from bullet_app.target import TargetMission
 from bullet_app.tracking_log import TrackingLog
 from los_tracking.types import ControlDemand, Diagnostics, NavigationResult, State, TrackStage
+
+
+def test_target_owns_tracking_log_and_hover_has_no_tracking_work():
+    target = TargetMission(DEFAULT_TARGET_PROFILE)
+    hover = FlightMission()
+    assert isinstance(target.tracking_log, TrackingLog)
+    assert not hasattr(hover, 'tracking_log')
+    assert hover.on_command_sent(StepContext(hover.blackboard, 1.), Command(1000, False)) is None
+
+    messages = []
+    sink = logger.add(lambda message: messages.append(str(message)), level='DEBUG', format='{message}')
+    try:
+        target.phase = Phase.SEARCH
+        target.ground_altitude_m = 0.0
+        target.blackboard.telemetry = SimpleNamespace(attitude=None, vfr_hud=SimpleNamespace(alt=10.0))
+        target.on_command_sent(StepContext(target.blackboard, 1.0), Command(1000, False))
+        assert any('TRACK checkpoint' in line and 'rc_throttle=1000' in line and 'rc_arm=False' in line
+                   for line in messages)
+    finally:
+        logger.remove(sink)
 
 
 def test_run_log_creates_timestamped_file_and_keeps_debug_out_of_terminal(tmp_path, capsys):
@@ -63,7 +86,7 @@ def test_tracking_checkpoints_and_events_are_bounded():
         trace.observe(mission, StepContext(board, 1.1), command)
         board.visual.bbox = {'capture_ns': 1_210_000_000, 'bbox': None}
         trace.observe(mission, StepContext(board, 1.21), command)
-        board.visual.contact = True
+        board.simulation.target_contact = True
         mission.result = 'target not found'
         trace.observe(mission, StepContext(board, 1.42), command)
         trace.observe(mission, StepContext(board, 1.43), command)

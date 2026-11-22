@@ -45,7 +45,8 @@ def test_missing_altitude_keeps_startup_allowance_then_faults():
 
 
 @pytest.mark.parametrize('serial', (False, True))
-def test_auto_run_publishes_before_result_and_final_disarm(monkeypatch, tmp_path, serial):
+@pytest.mark.parametrize('stale', (False, True))
+def test_auto_run_publishes_before_result_and_final_disarm(monkeypatch, tmp_path, serial, stale):
     events = []
     connections = []
 
@@ -65,7 +66,7 @@ def test_auto_run_publishes_before_result_and_final_disarm(monkeypatch, tmp_path
 
         def snapshot(self):
             return SimpleNamespace(
-                heartbeat=SimpleNamespace(base_mode=0), heartbeat_at=100.0,
+                heartbeat=SimpleNamespace(base_mode=0), heartbeat_at=50.0 if stale else 100.0,
                 vfr_hud=SimpleNamespace(alt=2.0), vfr_hud_at=100.0,
                 attitude_hz=50.0, vfr_hud_hz=50.0,
             )
@@ -93,6 +94,12 @@ def test_auto_run_publishes_before_result_and_final_disarm(monkeypatch, tmp_path
         def step(self, context):
             events.append('step')
             return Command(1300, False)
+
+        def fault(self, reason, now):
+            self.phase = Phase.FAULT
+
+        def on_command_sent(self, context, command):
+            events.append(f'observed {command.throttle}')
 
     class Diagnostics(RuntimeDiagnostics):
         def observe_events(self, *args, **kwargs):
@@ -129,11 +136,13 @@ def test_auto_run_publishes_before_result_and_final_disarm(monkeypatch, tmp_path
                                '  mavlink:\n    type: serial\n'
                                '    endpoint: /dev/ttyUSB1\n    baudrate: 57600\n')
     options = SimpleNamespace(mission='hover-land', config=config_path,
-                              mavlink_endpoint=None, msp_host=None, msp_port=None)
-    assert app.run_mission(options) == 0
+                              mavlink_endpoint=None, msp_host=None, msp_port=None,
+                              contact_endpoint=None)
+    assert app.run_mission(options) == (1 if stale else 0)
     assert connections == ([('mavlink', '/dev/ttyUSB1', 57600),
                             ('msp serial', '/dev/ttyUSB0', 115200)] if serial else [
                             ('mavlink', 'tcp:127.0.0.1:5762', None),
                             ('msp tcp', '127.0.0.1', 5761)])
-    assert events == ['poll', 'step', 'send 1300', 'publish', 'diagnostics',
+    command_events = ['send 1000', 'observed 1000'] if stale else ['step', 'send 1300', 'observed 1300']
+    assert events == ['poll', *command_events, 'publish', 'diagnostics',
                       'send 1000', 'send 1000', 'send 1000']

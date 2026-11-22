@@ -2,7 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 from beta_client.timesync import TimeSyncStatus
+from los_tracking.types import State
 
+from bullet_app.blackboard import StepContext
 from bullet_app.cli import DEFAULT_TARGET_PROFILE
 from bullet_app.flight import Action, Phase
 from bullet_app.target import TargetMission, _quaternion
@@ -70,10 +72,29 @@ def test_target_search_failure_lands_and_contact_disarms():
     other.ground_altitude_m = 0.
     other.height_m = 10.
     other.blackboard.telemetry = _sample(20.)
-    other.observe_contact({'target_id': 'red_truck', 'drone_id': 'drone_1'})
+    other.observe_simulation_contact({'target_id': 'red_truck', 'drone_id': 'drone_1'})
     command = tick(other, 20., 10., 20., True, True)
     assert other.phase == Phase.DISARMING and other.result == 'hit'
     assert not command.arm and command.throttle == 1000
+
+
+def test_commit_without_simulation_contact_lands_after_timeout():
+    mission = TargetMission(DEFAULT_TARGET_PROFILE, mode='auto')
+    mission.phase = Phase.COMMIT
+    mission.ground_altitude_m = 0.
+    mission.height_m = 10.
+    mission.los_started = 100.
+    mission.commit_started = 100.
+    mission.last_altitude_at = 103.1
+    mission.blackboard.telemetry = _sample(103.1)
+    mission.blackboard.telemetry.heartbeat = SimpleNamespace(base_mode=128)
+    mission._sensor_inputs = lambda _: None
+    mission.navigator.update = lambda *_args, **_kwargs: SimpleNamespace(
+        state=State.COMMIT, command=None, valid_until_s=0.)
+    command = mission._target_step(StepContext(mission.blackboard, 103.1))
+    assert mission.phase == Phase.LAND
+    assert mission.result == 'contact not confirmed'
+    assert command.arm
 
 
 def test_mavlink_quaternion_is_converted_to_bullet_axes():

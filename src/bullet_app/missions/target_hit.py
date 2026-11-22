@@ -10,6 +10,7 @@ from los_tracking.types import AttitudeSample, BarometerSample, State, TargetObs
 from ..altitude_control import HOVER_THROTTLE
 from ..blackboard import StepContext
 from ..sensor_estimator import TargetSensorEstimator
+from ..tracking_log import TrackingLog
 from .base import Action, Command, MAX_HEIGHT_M, MIN_HEIGHT_M, MissionBase, Mode, Phase, Readiness
 
 TARGET_HEIGHT_M = 10.0
@@ -92,6 +93,7 @@ class TargetMission(MissionBase):
         self.config = NavigatorConfig.from_yaml(config_path)
         self.navigator = LosNavigator(self.config)
         self.sensor_estimator = TargetSensorEstimator(self.config.tuning)
+        self.tracking_log = TrackingLog()
         self.attempted = False
         self.search_started = None
         self.last_yaw = None
@@ -157,10 +159,10 @@ class TargetMission(MissionBase):
         except (KeyError, TypeError, OverflowError, ZeroDivisionError):
             return False
 
-    def observe_contact(self, event):
+    def observe_simulation_contact(self, event):
         if event is not None and event.get('target_id') == 'red_truck' and event.get('drone_id') == 'drone_1' and self.phase in (
                 Phase.SEARCH, Phase.CENTER, Phase.SETTLE, Phase.LOS, Phase.COMMIT):
-            self.blackboard.visual.contact = True
+            self.blackboard.simulation.target_contact = True
 
     def request(self, action: Action, now, altitude_m=None, height_m=None, *, automatic=False):
         if action in (Action.ARM, Action.START) and not self.sync_ready(now):
@@ -255,7 +257,7 @@ class TargetMission(MissionBase):
         if self.mode == Mode.MANUAL and not view_alive:
             self._fail('Bullet View connection lost', now)
             return super().step(context)
-        if self.blackboard.visual.contact:
+        if self.blackboard.simulation.target_contact:
             self.result = 'hit'
             self._enter(Phase.DISARMING, now)
             return Command(1000, False)
@@ -330,6 +332,10 @@ class TargetMission(MissionBase):
         if self.phase in (Phase.SEARCH, Phase.CENTER, Phase.SETTLE, Phase.LOS, Phase.COMMIT):
             return self._target_step(context)
         return super().step(context)
+
+    def on_command_sent(self, context: StepContext, command: Command) -> None:
+        """Record target guidance against the command App actually sent."""
+        self.tracking_log.observe(self, context, command)
 
     def _on_hover_complete(self, context: StepContext) -> None:
         self._enter(Phase.SEARCH, context.now_s)

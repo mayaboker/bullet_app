@@ -12,7 +12,12 @@ class VisualData:
     """Latest accepted target observations; bbox keeps its capture timestamp."""
 
     bbox: dict | None = None
-    contact: bool = False
+
+@dataclass(slots=True)
+class SimulationData:
+    """Simulator-only observations kept separate from camera data."""
+
+    target_contact: bool = False
 
 
 @dataclass(slots=True)
@@ -41,6 +46,7 @@ class Blackboard:
         """Clear observations before a new App run, including test runs."""
         self.telemetry: TelemetrySnapshot = TelemetrySnapshot()
         self.visual: VisualData = VisualData()
+        self.simulation: SimulationData = SimulationData()
         self.features: FeatureData = FeatureData()
         self.view_alive: bool = False
 

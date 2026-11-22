@@ -11,10 +11,9 @@ from pymavlink import mavutil
 
 from .blackboard import Blackboard, StepContext
 from .config import AppConfig, ConnectionType
-from .ingress import TargetIngress
+from .tracker import TrackerSubscriber
 from .missions import Action, Command, Mode, Phase, create_mission
 from .runtime_diagnostics import RuntimeDiagnostics
-from .tracking_log import TrackingLog
 from .view_link import ViewLink
 
 CONTROL_CENTER = 1500
@@ -84,17 +83,29 @@ def _open_mavlink(config: AppConfig) -> MavlinkTelemetry:
     return MavlinkTelemetry(config.mavlink.endpoint, baud=config.mavlink.baudrate)
 
 
-def _collect_inputs(mission, context: StepContext, ingress, view) -> None:
+def _open_target_inputs(options, config: AppConfig, resources: ExitStack):
+    """Open tracker input and opt-in simulator contact for target-hit only."""
+    if options.mission != 'target-hit':
+        return None, None
+    tracker = resources.enter_context(TrackerSubscriber(options.bbox_endpoint))
+    if not config.simulation.enabled:
+        return tracker, None
+    from .simulation import SimulationContactSubscriber
+    simulation = resources.enter_context(SimulationContactSubscriber(config.simulation.contact_endpoint))
+    return tracker, simulation
+
+
+def _collect_inputs(mission, context: StepContext, tracker, simulation, view) -> None:
     """Apply target observations and View commands before the mission step."""
     now = context.now_s
     blackboard = context.blackboard
-    if ingress is not None:
+    if tracker is not None:
         mission.observe_timesync(blackboard.telemetry.timesync, now)
-        bboxes, contact = ingress.poll()
-        for bbox in bboxes:
+        for bbox in tracker.poll():
             if mission.observe_bbox(bbox, now):
                 view.publish_bbox(blackboard.visual.bbox)
-        mission.observe_contact(contact)
+        if simulation is not None:
+            mission.observe_simulation_contact(simulation.poll())
     view.poll(mission, context)
     blackboard.view_alive = view.view_alive(now)
 
@@ -125,11 +136,11 @@ def run_mission(options) -> int:
     """Run one auto flight or serve repeated View-approved flights."""
     config = AppConfig.from_yaml(options.config).with_overrides(
         msp_host=options.msp_host, msp_port=options.msp_port,
-        mavlink_endpoint=options.mavlink_endpoint)
+        mavlink_endpoint=options.mavlink_endpoint,
+        contact_endpoint=options.contact_endpoint)
     blackboard = Blackboard()
     blackboard.reset()
     mission = create_mission(options, blackboard)
-    tracking_log = TrackingLog() if mission.mission_kind == 'target-hit' else None
     with ExitStack() as resources:
         telemetry = resources.enter_context(_open_mavlink(config))
         telemetry.set_message_rate(mavutil.mavlink.MAVLINK_MSG_ID_VFR_HUD, TELEMETRY_RATE_HZ)
@@ -140,8 +151,7 @@ def run_mission(options) -> int:
         sitl_confirmed = _confirm_sitl(transport)
         view = resources.enter_context(ViewLink())
         view.sitl_confirmed = sitl_confirmed
-        ingress = (resources.enter_context(TargetIngress(options.bbox_endpoint, options.contact_endpoint))
-                   if options.mission == 'target-hit' else None)
+        tracker, simulation = _open_target_inputs(options, config, resources)
         try:
             connected_at = time.monotonic()
             next_tick = connected_at
@@ -149,13 +159,12 @@ def run_mission(options) -> int:
             while True:
                 blackboard.telemetry = telemetry.snapshot()
                 context = StepContext(blackboard, time.monotonic())
-                _collect_inputs(mission, context, ingress, view)
+                _collect_inputs(mission, context, tracker, simulation, view)
                 command = _step_with_safety(mission, context, connected_at)
                 _send_command(transport, command)
-                if tracking_log is not None:
-                    tracking_log.observe(mission, context, command)
+                mission.on_command_sent(context, command)
                 view.publish(mission, context)
-                diagnostics.observe_events(mission, context, view, target_enabled=ingress is not None)
+                diagnostics.observe_events(mission, context, view, target_enabled=tracker is not None)
                 if mission.mode == Mode.AUTO:
                     outcome = _automatic_result(mission, context.firmware_armed)
                     if outcome is not None:

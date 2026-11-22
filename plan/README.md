@@ -60,3 +60,5 @@
 | [0056 Readable App control loop](0056-readable-app-control-loop.md) | Extract input, safety, and diagnostics responsibilities from the 50 Hz runtime loop. | Implemented; 57 tests passed | Pending (no commit requested) |
 | [0057 Betaflight connection config](0057-betaflight-connection-config.md) | Select TCP or serial MSP and MAVLink links from a commented YAML config. | Implemented; 65 tests and wheel build passed | Pending (no commit requested) |
 | [0058 Open MAVLink helper](0058-open-mavlink-helper.md) | Make TCP and serial MAVLink construction explicit beside the MSP helper. | Implemented; 65 tests passed | Pending (no commit requested) |
+| [0059 Target tracking-log ownership](0059-target-tracking-log-ownership.md) | Move tracking-log state into TargetMission and observe commands after MSP send. | Implemented; 68 tests passed | Pending (no commit requested) |
+| [0060 Separate tracker and simulation inputs](0060-separate-tracker-simulation.md) | Split tracker boxes from optional simulator contact and gate contact through YAML. | Implemented; 77 tests passed | Pending (no commit requested) |

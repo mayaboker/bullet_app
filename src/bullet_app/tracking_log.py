@@ -1,7 +1,7 @@
 """Bounded diagnostic checkpoints for target guidance, separate from telemetry recording."""
 from loguru import logger
 
-from .missions import Phase
+from .missions.base import Phase
 from .blackboard import StepContext
 
 CHECKPOINT_PERIOD_S = 0.2
@@ -32,7 +32,7 @@ class TrackingLog:
             logger.debug('target event={} at={:.3f} phase={} bbox={}',
                          'visible' if visible else 'lost', now, mission.phase.value, box)
             self.last_visible = visible
-        if context.blackboard.visual.contact and not self.last_contact:
+        if context.blackboard.simulation.target_contact and not self.last_contact:
             logger.info('target event=contact at={:.3f} phase={}', now, mission.phase.value)
             self.last_contact = True
         if mission.result != self.last_result:
