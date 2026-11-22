@@ -54,3 +54,4 @@
 | [0050 Local readiness enum](0050-local-readiness-enum.md) | Name App readiness values while preserving numeric MAVLink status and avoiding a shared Python flight contract. | Implemented; 52 App and 90 View tests passed | `fae5430` |
 | [0051 Mission action enum](0051-mission-action-enum.md) | Use App-owned action members for mission requests while preserving MAVLink commands and ACK IDs. | Implemented; 53 tests passed | Pending (no commit requested) |
 | [0052 Mission mode enum](0052-mission-mode-enum.md) | Store approval mode as an App-owned enum while keeping CLI text and MAVLink status values. | Implemented; 54 tests passed | Pending (no commit requested) |
+| [0053 StepContext mission chain](0053-step-context-mission-chain.md) | Pass one StepContext through shared mission tick helpers and hover-completion hooks. | Implemented; 54 tests passed | Pending (no commit requested) |

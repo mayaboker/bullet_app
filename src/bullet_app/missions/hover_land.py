@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 
+from ..blackboard import StepContext
 from .base import MAX_HEIGHT_M, MIN_HEIGHT_M, MissionBase, Mode, Phase
 
 DEFAULT_PROFILE = Path(__file__).with_name('hover_land.yaml')
@@ -41,5 +42,5 @@ class HoverLandMission(MissionBase):
         """Report ready because hover-land does not use camera detections."""
         return True
 
-    def _on_hover_complete(self, now):
-        self._enter(Phase.LAND, now)
+    def _on_hover_complete(self, context: StepContext) -> None:
+        self._enter(Phase.LAND, context.now_s)

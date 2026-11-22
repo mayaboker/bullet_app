@@ -5,7 +5,7 @@ from bullet_app.cli import DEFAULT_TARGET_PROFILE
 from bullet_app.flight import Action, FlightMission, Phase
 from bullet_app.missions.base import Readiness
 from bullet_app.target import TargetMission
-from conftest import tick
+from conftest import context, tick
 
 
 def test_machine_rejects_unlisted_phase_changes():
@@ -72,7 +72,7 @@ def test_target_phases_share_flight_safety_and_land_action(phase):
     mission.phase = phase
     mission.entered_at = 1.0
     mission.ground_altitude_m = 0.0
-    mission._handle_view_loss(2.0, False)
+    mission._handle_view_loss(context(mission, 2.0, view_alive=False))
     assert mission.phase == Phase.LAND
 
 

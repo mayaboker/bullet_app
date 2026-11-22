@@ -229,6 +229,8 @@ class MissionBase:
         else:
             raise ValueError('Unsupported flight action')
 
+
+
     def step(self, context: StepContext) -> Command:
         """Advance one control tick using fresh MAVLink altitude and arm feedback.
 
@@ -240,34 +242,35 @@ class MissionBase:
         """
         if context.blackboard is not self.blackboard:
             raise ValueError('Mission step uses a different blackboard')
-        now = context.now_s
-        altitude_m = context.altitude_m
-        altitude_at = context.altitude_at_s
-        self._validate_altitude(now, altitude_m, altitude_at)
+        self._validate_altitude(context)
         if self.entered_at is None:
-            self.entered_at = now
-        self._handle_view_loss(now, context.view_alive)
-        self._advance_phase(now, altitude_m, altitude_at, context.firmware_armed)
+            self.entered_at = context.now_s
+        self._handle_view_loss(context)
+        self._advance_phase(context)
         return self._flight_command()
 
     @staticmethod
-    def _validate_altitude(now: float, altitude_m: float, altitude_at: float) -> None:
+    def _validate_altitude(context: StepContext) -> None:
         """Require a finite altitude received within the last monotonic second."""
+        now = context.now_s
+        altitude_m = context.altitude_m
+        altitude_at = context.altitude_at_s
         if altitude_m is None or not isfinite(altitude_m) or altitude_at <= 0 or altitude_at > now or now - altitude_at > 1.0:
             raise ValueError('Fresh finite MAVLink altitude required')
 
-    def _handle_view_loss(self, now: float, view_alive: bool) -> None:
+    def _handle_view_loss(self, context: StepContext) -> None:
         """Disarm idle or land airborne manual flight when View is absent."""
-        if self.mode != Mode.MANUAL or view_alive:
+        if self.mode != Mode.MANUAL or context.view_alive:
             return
         if self.phase in (Phase.ARMING, Phase.ARMED):
-            self._enter(Phase.DISARMING, now)
+            self._enter(Phase.DISARMING, context.now_s)
         elif self.phase in self.airborne_phases - {Phase.LAND}:
-            self._enter(Phase.LAND, now)
+            self._enter(Phase.LAND, context.now_s)
 
-    def _advance_phase(self, now: float, altitude_m: float, altitude_at: float,
-                       firmware_armed: bool) -> None:
+    def _advance_phase(self, context: StepContext) -> None:
         """Advance the current phase from arm feedback, timers, and altitude."""
+        now = context.now_s
+        firmware_armed = context.firmware_armed
         elapsed = now - self.entered_at
         if self.phase == Phase.PREARM:
             if firmware_armed:
@@ -286,7 +289,7 @@ class MissionBase:
             if firmware_armed:
                 self.fault('Vehicle armed without App command', now)
         elif self.phase in (Phase.TAKEOFF, Phase.HOVER, Phase.LAND):
-            self._advance_altitude_phase(now, altitude_m, altitude_at, firmware_armed, elapsed)
+            self._advance_altitude_phase(context)
         elif self.phase == Phase.DISARMING:
             if not firmware_armed:
                 self._enter(Phase.DISARMED, now)
@@ -294,55 +297,57 @@ class MissionBase:
             elif elapsed > DISARM_TIMEOUT_S:
                 self.fault('Disarm not confirmed', now)
 
-    def _advance_altitude_phase(self, now: float, altitude_m: float, altitude_at: float,
-                                firmware_armed: bool, elapsed: float) -> None:
+    def _advance_altitude_phase(self, context: StepContext) -> None:
         """Update airborne altitude control and takeoff, hover, or land state."""
-        if not firmware_armed:
-            self.fault('Vehicle unexpectedly disarmed', now)
+        if not context.firmware_armed:
+            self.fault('Vehicle unexpectedly disarmed', context.now_s)
             return
-        self._update_altitude_control(altitude_m, altitude_at)
+        self._update_altitude_control(context)
         if self.phase == Phase.TAKEOFF:
-            self._advance_takeoff(now, altitude_m)
+            self._advance_takeoff(context)
         elif self.phase == Phase.HOVER:
-            if not self._near_hover(altitude_m):
-                self._enter(Phase.TAKEOFF, now)
-            elif elapsed >= self.hover_duration_s:
-                self._on_hover_complete(now)
+            if not self._near_hover(context):
+                self._enter(Phase.TAKEOFF, context.now_s)
+            elif context.now_s - self.entered_at >= self.hover_duration_s:
+                self._on_hover_complete(context)
         else:
-            self._advance_landing(now, altitude_m)
-        self._check_phase_timeout(now)
+            self._advance_landing(context)
+        self._check_phase_timeout(context)
 
-    def _update_altitude_control(self, altitude_m: float, altitude_at: float) -> None:
+    def _update_altitude_control(self, context: StepContext) -> None:
         """Recompute throttle only for a newer altitude sample."""
+        altitude_at = context.altitude_at_s
         if altitude_at <= self.last_altitude_at:
             return
         landing = self.phase == Phase.LAND
         target = self.ground_altitude_m + (0.0 if landing else self.height_m)
-        self.controller.update(target, altitude_m, altitude_at, landing=landing,
+        self.controller.update(target, context.altitude_m, altitude_at, landing=landing,
                                low_height_takeoff=(self.phase == Phase.TAKEOFF
                                                    and self.height_m < LOW_HEIGHT_TAKEOFF_THRESHOLD_M))
         self.last_altitude_at = altitude_at
 
-    def _near_hover(self, altitude_m: float) -> bool:
+    def _near_hover(self, context: StepContext) -> bool:
         """Check the height band and filtered vertical-speed hover limits."""
         hover_band = min(0.5, max(0.03, self.height_m * 0.25))
         return (self.controller.speed_ready
-                and abs(altitude_m - (self.ground_altitude_m + self.height_m)) <= hover_band
+                and abs(context.altitude_m - (self.ground_altitude_m + self.height_m)) <= hover_band
                 and abs(self.controller.speed) <= HOVER_SPEED_M_S)
 
-    def _advance_takeoff(self, now: float, altitude_m: float) -> None:
+    def _advance_takeoff(self, context: StepContext) -> None:
         """Enter hover after the vehicle remains near target height for 0.5 s."""
-        if not self._near_hover(altitude_m):
+        now = context.now_s
+        if not self._near_hover(context):
             self.near_hover_at = None
         elif self.near_hover_at is None:
             self.near_hover_at = now
         elif now - self.near_hover_at >= HOVER_ENTRY_DWELL_S:
             self._enter(Phase.HOVER, now)
 
-    def _advance_landing(self, now: float, altitude_m: float) -> None:
+    def _advance_landing(self, context: StepContext) -> None:
         """Begin disarming after one second near the launch altitude."""
+        now = context.now_s
         landed = (self.controller.speed_ready
-                  and abs(altitude_m - self.ground_altitude_m) <= LANDING_HEIGHT_M
+                  and abs(context.altitude_m - self.ground_altitude_m) <= LANDING_HEIGHT_M
                   and abs(self.controller.speed) <= LANDING_SPEED_M_S)
         if not landed:
             self.landing_dwell_at = None
@@ -351,7 +356,7 @@ class MissionBase:
         elif now - self.landing_dwell_at >= LANDING_DWELL_S:
             self._enter(Phase.DISARMING, now)
 
-    def _check_phase_timeout(self, now: float) -> None:
+    def _check_phase_timeout(self, context: StepContext) -> None:
         """Fault a takeoff or landing that exceeds its height-scaled limit."""
         if self.phase == Phase.TAKEOFF:
             limit = max(MIN_PHASE_TIMEOUT_S, PHASE_TIMEOUT_MARGIN_S
@@ -361,8 +366,8 @@ class MissionBase:
                         + self.height_m / LAND_TIMEOUT_SPEED_M_S)
         else:
             return
-        if now - self.entered_at > limit:
-            self.fault(f'{self.phase.value} timed out', now)
+        if context.now_s - self.entered_at > limit:
+            self.fault(f'{self.phase.value} timed out', context.now_s)
 
     def _flight_command(self) -> Command:
         """Map the resulting phase and controller throttle to an RC command."""
@@ -370,6 +375,6 @@ class MissionBase:
             return Command(self.controller.throttle, True)
         return Command(1000, self.phase in (Phase.ARMING, Phase.ARMED))
 
-    def _on_hover_complete(self, now: float) -> None:
+    def _on_hover_complete(self, context: StepContext) -> None:
         """Let the selected mission choose its phase after timed hover."""
         raise NotImplementedError

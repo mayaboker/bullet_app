@@ -331,5 +331,5 @@ class TargetMission(MissionBase):
             return self._target_step(context)
         return super().step(context)
 
-    def _on_hover_complete(self, now):
-        self._enter(Phase.SEARCH, now)
+    def _on_hover_complete(self, context: StepContext) -> None:
+        self._enter(Phase.SEARCH, context.now_s)
