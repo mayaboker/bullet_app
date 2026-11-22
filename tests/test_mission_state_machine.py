@@ -1,11 +1,49 @@
 """Phase graph and entry actions shared by the mission implementations."""
+from io import StringIO
+
 import pytest
+from loguru import logger
 
 from bullet_app.cli import DEFAULT_TARGET_PROFILE
 from bullet_app.flight import Action, FlightMission, Phase
 from bullet_app.missions.base import Readiness
 from bullet_app.target import TargetMission
 from conftest import context, tick
+
+
+def test_phase_changes_log_colored_terminal_and_plain_file_text():
+    terminal = StringIO()
+    file_text = StringIO()
+    terminal_sink = logger.add(terminal, format='{message}', colorize=True)
+    file_sink = logger.add(file_text, format='{message}', colorize=False)
+    try:
+        hover = FlightMission()
+        hover._enter(Phase.DISARMED, 1.0)
+        hover._enter(Phase.DISARMED, 2.0)
+        with pytest.raises(ValueError, match='Invalid mission transition'):
+            hover._enter(Phase.LOS, 3.0)
+        hover.fault('test fault', 4.0)
+
+        target = TargetMission(DEFAULT_TARGET_PROFILE)
+        for now, phase in enumerate((Phase.DISARMED, Phase.ARMING, Phase.ARMED,
+                                     Phase.TAKEOFF, Phase.HOVER, Phase.SEARCH), start=1):
+            target._enter(phase, float(now))
+        target._enter(Phase.LAND, 7.0)
+
+        lines = file_text.getvalue().splitlines()
+        assert len(lines) == 9
+        assert lines[0] == 'mission=hover-land state prearm -> disarmed at=1.000'
+        assert lines[1] == 'mission=hover-land state disarmed -> fault at=4.000'
+        assert lines[-2] == 'mission=target-hit state hover -> search at=6.000'
+        assert lines[-1] == 'mission=target-hit state search -> land at=7.000'
+        assert '\x1b[32m' in terminal.getvalue()  # disarmed
+        assert '\x1b[31m' in terminal.getvalue()  # fault
+        assert '\x1b[33m' in terminal.getvalue()  # land
+        assert '\x1b[36m' in terminal.getvalue()  # search
+        assert '\x1b[' not in file_text.getvalue()
+    finally:
+        logger.remove(terminal_sink)
+        logger.remove(file_sink)
 
 
 def test_machine_rejects_unlisted_phase_changes():

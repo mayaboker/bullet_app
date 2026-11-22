@@ -11,7 +11,7 @@ App runs a 50 Hz loop for hover/land or red-truck target-hit. Bullet View sends 
 - Configurable hover/land mission and timestamped tracker input for target-hit.
 - Optional simulator contact confirmation for target-hit, enabled in YAML.
 - Manual View approval or one automatic attempt, with telemetry and View loss handling.
-- Persistent mission logs with target tracking checkpoints.
+- Colored terminal logs for every mission phase change and persistent target tracking checkpoints.
 
 ## Architecture
 
@@ -101,7 +101,7 @@ The bundled [app.yaml](src/bullet_app/app.yaml) selects independent MSP and MAVL
 
 ## Development
 
-Run App with `uv run --locked bullet-app`; inspect options with `--help`. Each process writes `~/workspaces/bullet_ng/logs/bullet_app_<timestamp>.log` before flight and prints its path. The file includes INFO events and 5 Hz target tracking checkpoints. Logging failure stops startup. No formatting or lint command is specified by this repository.
+Run App with `uv run --locked bullet-app`; inspect options with `--help`. Each process writes `~/workspaces/bullet_ng/logs/bullet_app_<timestamp>.log` before flight and prints its path. Every accepted phase change logs the mission, previous and new phase, and monotonic entry time. Terminals with color support show the destination in color: red for fault, yellow for land/disarming, green for disarmed, and cyan for other phases. The file keeps plain text INFO events and 5 Hz target tracking checkpoints. Logging failure stops startup. No formatting or lint command is specified by this repository.
 
 ## Testing
 

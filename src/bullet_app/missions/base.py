@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from enum import Enum, IntEnum
 from math import isfinite
+from loguru import logger
 from transitions import Machine
 
 from ..altitude_control import AltitudeControl
@@ -165,6 +166,17 @@ class MissionBase:
             self.near_hover_at = None
         if self.phase == Phase.LAND:
             self.landing_dwell_at = None
+        if self.phase == Phase.FAULT:
+            color = 'red'
+        elif self.phase in (Phase.LAND, Phase.DISARMING):
+            color = 'yellow'
+        elif self.phase == Phase.DISARMED:
+            color = 'green'
+        else:
+            color = 'cyan'
+        logger.opt(colors=True).info(
+            f'mission={{}} state {{}} -> <{color}>{{}}</{color}> at={{:.3f}}',
+            self.mission_kind, previous.value, self.phase.value, self.entered_at)
 
     @property
     def readiness(self) -> Readiness:

@@ -63,3 +63,4 @@
 | [0059 Target tracking-log ownership](0059-target-tracking-log-ownership.md) | Move tracking-log state into TargetMission and observe commands after MSP send. | Implemented; 68 tests passed | Pending (no commit requested) |
 | [0060 Separate tracker and simulation inputs](0060-separate-tracker-simulation.md) | Split tracker boxes from optional simulator contact and gate contact through YAML. | Implemented; 77 tests passed | Pending (no commit requested) |
 | [0061 Independent input openers](0061-independent-input-openers.md) | Give tracker and optional simulation contact separate App setup paths. | Implemented; 78 tests passed | Pending (no commit requested) |
+| [0062 Colored mission state logs](0062-colored-mission-state-logs.md) | Log each accepted mission phase change with terminal color. | Implemented; 79 tests passed | Pending (no commit requested) |
