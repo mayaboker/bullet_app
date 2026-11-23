@@ -193,8 +193,8 @@ class TargetMission(MissionBase):
             a = sample.attitude
             if self.sync_ready(now) and (self.last_attitude_boot_ms is None or a.time_boot_ms > self.last_attitude_boot_ms):
                 self.last_attitude_boot_ms = a.time_boot_ms
-                measured_at = (self.timesync_status.offset_ns + a.time_boot_ms * 1_000_000) / 1e9
-                if 0 <= now - measured_at <= self.config.tuning.max_attitude_age_s:
+                measured_at = sample.attitude_at
+                if now - measured_at <= self.config.tuning.max_attitude_age_s:
                     self.sensor_estimator.push_attitude(AttitudeSample(
                         SITL_STREAM_ID, a.time_boot_ms, measured_at,
                         _quaternion(a.roll, a.pitch, a.yaw)))
