@@ -35,6 +35,10 @@ DISARM_SEND_COUNT = 3
 RECONNECT_READY_TIMEOUT_S = 10.0
 
 
+class FcuConnectionRetry(Exception):
+    """Retry an accepted restart after FCU connection setup failed."""
+
+
 def _send_command(transport: TcpTransport | SerialTransport, command: Command):
     """Send one MSP RC frame and return the exact channels and local send time."""
     channels = RcChannels((command.roll, command.pitch, command.throttle, command.yaw,
@@ -160,14 +164,14 @@ def _step_with_safety(mission, context: StepContext, connected_at: float) -> Com
 
 
 # application entry point for the standalone flight mission
-def run_mission(options) -> int:
-    """Run one auto flight or serve repeated View-approved flights."""
+def run_mission(options, *, restart_epoch=0, retry_fcu=False) -> int:
+    """Run one automatic flight or one manual FCU session."""
     config = AppConfig.from_yaml(options.config).with_overrides(
         msp_host=options.msp_host, msp_port=options.msp_port,
         mavlink_endpoint=options.mavlink_endpoint,
         contact_endpoint=options.contact_endpoint)
     if getattr(options, 'mode', 'auto') == 'manual':
-        return _run_manual(options, config)
+        return _run_manual(options, config, restart_epoch=restart_epoch, retry_fcu=retry_fcu)
     blackboard = _init_blackboard()
     mission = create_mission(options, blackboard)
 
@@ -255,21 +259,20 @@ def _manual_config(options):
         contact_endpoint=options.contact_endpoint)
 
 
-def _run_manual(options, initial_config: AppConfig) -> int:
-    """Keep View connected while individual disarmed SITL sessions come and go."""
+def _run_manual(options, initial_config: AppConfig, *, restart_epoch=0, retry_fcu=False) -> int:
+    """Serve one manual session until View requests a fresh FCU connection."""
     blackboard = _init_blackboard()
     session = None
-    pending_restart = False
+    pending_restart = retry_fcu
     config = initial_config
     connect_started = time.monotonic()
     with ViewLink() as view, ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(_connect_flight, config)
         view.app_state = 'restarting' if config.view_restart_enabled else 'disabled'
-        view.app_epoch = 0
+        view.app_epoch = restart_epoch
         next_tick = time.monotonic()
 
         def request_restart():
-            nonlocal config, future, pending_restart, connect_started, session
             if not initial_config.view_restart_enabled or options.mode != 'manual':
                 raise ValueError('Restart disabled')
             if (initial_config.msp.type is not ConnectionType.TCP or
@@ -287,18 +290,8 @@ def _run_manual(options, initial_config: AppConfig) -> int:
                     reloaded.msp.type is not ConnectionType.TCP or
                     reloaded.mavlink.type is not ConnectionType.TCP):
                 raise ValueError('Restart requires enabled SITL TCP config')
-            config = reloaded
-            if session is not None:
-                _close_manual_session(session)
-                session = None
-            blackboard.reset()
-            view.datum_m = None
-            view.last_phase = view.last_result = None
-            view.sitl_confirmed = False
-            view.app_state = 'restarting'
-            connect_started = time.monotonic()
-            future = executor.submit(_connect_flight, config)
-            pending_restart = True
+            # ViewLink acknowledges this validated request, then raises
+            # RestartRequested so the session's finally block owns cleanup.
 
         def session_lost(reason):
             nonlocal session, pending_restart
@@ -320,7 +313,12 @@ def _run_manual(options, initial_config: AppConfig) -> int:
                 if future is not None and future.done():
                     opened_resources = None
                     try:
-                        resources, telemetry, transport, sitl_confirmed = future.result()
+                        try:
+                            resources, telemetry, transport, sitl_confirmed = future.result()
+                        except Exception as error:
+                            if retry_fcu:
+                                raise FcuConnectionRetry(str(error)) from error
+                            raise
                         opened_resources = resources
                         blackboard.reset()
                         mission = create_mission(options, blackboard)
@@ -333,6 +331,8 @@ def _run_manual(options, initial_config: AppConfig) -> int:
                         session = (resources, telemetry, transport, mission, tracker, simulation,
                                    publisher, RuntimeDiagnostics(now), now)
                         view.sitl_confirmed = sitl_confirmed
+                    except FcuConnectionRetry:
+                        raise
                     except Exception as error:
                         if opened_resources is not None:
                             opened_resources.close()

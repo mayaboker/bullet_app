@@ -1,10 +1,11 @@
 """MAVLink restart gate and lifecycle status while the flight link is absent."""
 from types import SimpleNamespace
 
+import pytest
 from pymavlink import mavutil
 
 from bullet_app.blackboard import Blackboard, StepContext
-from bullet_app.view_link import APP_STATES, RESTART_COMMAND, ViewLink
+from bullet_app.view_link import APP_STATES, RESTART_COMMAND, RestartRequested, ViewLink
 
 
 def _message(command=RESTART_COMMAND, source=(255, 190), target=(1, 1), params=None):
@@ -23,7 +24,8 @@ def test_restart_command_validates_source_target_heartbeat_and_parameters():
     link = ViewLink()
     link.connection = SimpleNamespace(mav=mav, recv_match=lambda **_: messages.pop(0) if messages else None)
     link.last_view_at = 10.
-    link.poll(None, StepContext(Blackboard(), 10.), lambda: calls.append('restart'))
+    with pytest.raises(RestartRequested):
+        link.poll(None, StepContext(Blackboard(), 10.), lambda: calls.append('restart'))
     assert calls == ['restart']
     assert [ack[1] for ack in acks] == [mavutil.mavlink.MAV_RESULT_DENIED,
                                          mavutil.mavlink.MAV_RESULT_IN_PROGRESS]

@@ -130,7 +130,7 @@ uv run --locked pytest -q
 
 ## Troubleshooting
 
-If View disconnects for three seconds in manual mode, App disarms while idle or lands while airborne. On SITL connection loss, App keeps its View MAVLink link open and reports `restart_required`. After resetting the simulation, use **Restart Bullet App** in View to reload YAML and mission profile, clear runtime observations, and open a fresh flight session. This is available only for manual TCP SITL configs with `view_restart_enabled: true`; an exited App process must be launched again. If a contact override is rejected, enable `simulation.enabled` in the selected YAML. If target-hit reaches Commit without contact, it lands after three seconds.
+If View disconnects for three seconds in manual mode, App disarms while idle or lands while airborne. On SITL connection loss, App reports `restart_required`. After resetting the simulation, use **Restart Bullet App** in View to reload YAML and mission profile, clear runtime observations, and open a fresh flight session. App closes and reopens its View UDP link during the restart, then retries failed FCU connection attempts every second until they succeed or App stops. This is available only for manual TCP SITL configs with `view_restart_enabled: true`; an exited App process must be launched again. If a contact override is rejected, enable `simulation.enabled` in the selected YAML. If target-hit reaches Commit without contact, it lands after three seconds.
 
 ## Roadmap
 

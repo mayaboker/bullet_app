@@ -34,6 +34,10 @@ ACTION_IDS = {Action.ARM: 1, Action.DISARM: 2, Action.EMERGENCY: 3,
               Action.START: 4, Action.HEIGHT: 5, None: 0, Action.LAND: 6}
 
 
+class RestartRequested(Exception):
+    """A validated View request to replace the current manual flight session."""
+
+
 def _mavlink2(connection) -> None:
     connection.source_system = APP_SYSTEM_ID
     connection.source_component = APP_COMPONENT_ID
@@ -138,7 +142,7 @@ class ViewLink:
                     self.connection.mav.command_ack_send(RESTART_COMMAND,
                         mavutil.mavlink.MAV_RESULT_IN_PROGRESS, 0, 0,
                         VIEW_SYSTEM_ID, VIEW_COMPONENT_ID)
-                    continue
+                    raise RestartRequested
                 action, value = _command(message)
                 if not self.view_alive(now):
                     raise ValueError('Bullet View heartbeat is stale')
