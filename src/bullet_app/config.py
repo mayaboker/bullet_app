@@ -50,10 +50,11 @@ class SimulationConfig:
 class TelemetryPublisherConfig:
     endpoint: str | None = None
     topics: tuple[tuple[str, float], ...] = ()
+    record_msp_rc: bool = False
 
     @property
     def enabled(self) -> bool:
-        return any(fps > 0 for _, fps in self.topics)
+        return self.record_msp_rc or any(fps > 0 for _, fps in self.topics)
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,7 +113,8 @@ class AppConfig:
 
 
 def _publisher_config(value) -> TelemetryPublisherConfig:
-    data = _mapping(value, 'telemetry_publisher', {'endpoint', 'topics'}, {'endpoint', 'topics'})
+    data = _mapping(value, 'telemetry_publisher', {'endpoint', 'topics', 'record_msp_rc'},
+                    {'endpoint', 'topics'})
     endpoint = data['endpoint']
     match = re.fullmatch(r'tcp://127\.0\.0\.1:([1-9][0-9]{0,4})', endpoint) if isinstance(endpoint, str) else None
     if match is None or int(match[1]) > 65535:
@@ -123,7 +125,11 @@ def _publisher_config(value) -> TelemetryPublisherConfig:
     for topic, fps in topics.items():
         if type(fps) not in (int, float) or not isfinite(fps) or not 0 <= fps <= MAX_PUBLISH_FPS:
             raise ValueError(f'{topic} FPS must be finite and between 0 and {MAX_PUBLISH_FPS}')
-    return TelemetryPublisherConfig(endpoint, tuple((topic, float(fps)) for topic, fps in topics.items()))
+    record_msp_rc = data.get('record_msp_rc', False)
+    if type(record_msp_rc) is not bool:
+        raise ValueError('telemetry_publisher.record_msp_rc must be true or false')
+    return TelemetryPublisherConfig(endpoint, tuple((topic, float(fps)) for topic, fps in topics.items()),
+                                    record_msp_rc)
 
 
 def _validate_simulation(simulation: SimulationConfig) -> None:

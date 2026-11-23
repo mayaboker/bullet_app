@@ -1,3 +1,4 @@
+from math import radians
 from types import SimpleNamespace
 
 import pytest
@@ -114,6 +115,20 @@ def test_los_thrust_mapping_uses_captured_hover_pwm():
     assert _demand_command(demand(0.), mission.config, hover_pwm=1050).throttle == 1050
     assert _demand_command(demand(mission.config.vehicle.max_thrust_n),
                            mission.config, hover_pwm=1900).throttle == 2000
+
+
+@pytest.mark.parametrize('angle_deg, expected_pwm', [
+    (0, 1500), (10, 1722), (-10, 1278), (45, 2000), (-45, 1000), (50, 2000),
+])
+def test_los_angle_demand_uses_betaflight_actual_rate_curve(angle_deg, expected_pwm):
+    config = TargetMission(DEFAULT_TARGET_PROFILE).config
+    hover_thrust = config.vehicle.mass_kg * config.vehicle.gravity_m_s2
+    roll = _demand_command(ControlDemand(radians(angle_deg), 0., 0., hover_thrust),
+                           config, hover_pwm=1540)
+    pitch = _demand_command(ControlDemand(0., radians(angle_deg), 0., hover_thrust),
+                            config, hover_pwm=1540)
+    assert roll.roll == expected_pwm
+    assert pitch.pitch == expected_pwm
 
 
 def test_settle_to_los_retains_active_throttle_baseline():

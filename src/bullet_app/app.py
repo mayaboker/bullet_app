@@ -33,11 +33,14 @@ ALTITUDE_STARTUP_TIMEOUT_S = 10.0
 DISARM_SEND_COUNT = 3
 
 
-def _send_command(transport: TcpTransport | SerialTransport, command: Command) -> None:
+def _send_command(transport: TcpTransport | SerialTransport, command: Command):
+    """Send one MSP RC frame and return the exact channels and local send time."""
     channels = RcChannels((command.roll, command.pitch, command.throttle, command.yaw,
                            AUX_HIGH if command.arm else AUX_LOW, AUX_HIGH, AUX_LOW, AUX_LOW))
     send_rc(transport, channels)
+    sent_monotonic_ns = time.monotonic_ns()
     transport.drain_responses()
+    return channels, sent_monotonic_ns
 
 
 def _advance_automatic_start(mission, context: StepContext) -> None:
@@ -174,8 +177,8 @@ def run_mission(options) -> int:
 
         tracker = _open_tracker(options, resources)
         simulation = _open_simulation(options, config, resources)
-        if config.telemetry_publisher.enabled:
-            resources.enter_context(TelemetryPublisher(config.telemetry_publisher, blackboard))
+        publisher = (resources.enter_context(TelemetryPublisher(config.telemetry_publisher, blackboard))
+                     if config.telemetry_publisher.enabled else None)
         try:
             connected_at = time.monotonic()
             next_tick = connected_at
@@ -185,7 +188,9 @@ def run_mission(options) -> int:
                 context = StepContext(blackboard, time.monotonic())
                 _collect_inputs(mission, context, tracker, simulation, view)
                 command = _step_with_safety(mission, context, connected_at)
-                _send_command(transport, command)
+                sent = _send_command(transport, command)
+                if publisher is not None and sent is not None:
+                    publisher.enqueue_rc(sent[0], mission.phase.value, sent[1])
                 mission.on_command_sent(context, command)
                 view.publish(mission, context)
                 diagnostics.observe_events(mission, context, view, target_enabled=tracker is not None)
@@ -204,7 +209,9 @@ def run_mission(options) -> int:
         finally:
             for _ in range(DISARM_SEND_COUNT):
                 try:
-                    _send_command(transport, Command(THROTTLE_MIN, False))
+                    sent = _send_command(transport, Command(THROTTLE_MIN, False))
+                    if publisher is not None and sent is not None:
+                        publisher.enqueue_rc(sent[0], mission.phase.value, sent[1])
                 except OSError:
                     break
 

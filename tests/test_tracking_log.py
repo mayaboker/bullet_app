@@ -133,6 +133,8 @@ def test_los_stage_and_processed_guidance_are_logged():
         checkpoints = [line for line in messages if 'TRACK checkpoint' in line]
         assert len(checkpoints) == 2
         assert 'processed_seq=7' in checkpoints[0]
+        assert 'requested_vertical_speed_m_s=0.0' in checkpoints[0]
+        assert 'vertical_reference_m_s=0.0' in checkpoints[0]
         assert 'demand_yaw_rate_rad_s=0.3' in checkpoints[0]
         assert 'rc_pitch=1520' in checkpoints[0]
     finally:

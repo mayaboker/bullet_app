@@ -100,10 +100,12 @@ def test_view_loss_lands_or_disarms_and_fault_blocks_restart():
 def test_command_mapping_and_cli():
     sent = []
     transport = SimpleNamespace(send=sent.append, drain_responses=lambda: None)
-    _send_command(transport, Command(1400, True))
+    channels_sent, sent_at = _send_command(transport, Command(1400, True))
     frame = sent[0]
     channels = tuple(int.from_bytes(frame[5 + 2*i:7 + 2*i], 'little') for i in range(8))
     assert channels == (1500, 1500, 1400, 1500, 2000, 2000, 1000, 1000)
+    assert channels_sent.values == channels
+    assert sent_at > 0
     assert CliParser().parse([]) == AppOptions()
     assert CliParser().parse(['--mode', 'manual']).mode == 'manual'
     message = SimpleNamespace(command=21, **{f'param{i}': 0.0 for i in range(1, 8)})
