@@ -12,6 +12,13 @@ These instructions apply throughout this repository.
 
 Prefer simple composition and small contracts. Introduce abstractions only when they express a real component boundary.
 
+## Method readability (KISS)
+
+- Keep orchestration methods readable as a sequence of named steps. When a method combines distinct responsibilities or has deeply nested conditions, extract cohesive private helpers for those responsibilities.
+- For a control loop such as `run_mission`, consider separate helpers for connection setup, input collection, safety checks, mission stepping, telemetry publication, diagnostics, and pacing. Keep safety and cleanup order visible in the caller.
+- Pass existing context objects where appropriate. Avoid long argument lists, trivial one-line wrappers, and new classes used only to shorten a method.
+- Preserve behavior and test the affected paths after refactoring. Do not impose a fixed method length or number of helpers.
+
 ## Constants
 
 - Replace unexplained numeric literals (magic numbers) with descriptive named constants, especially for physical values, PID gains, limits, tolerances, durations, and channel assignments.

@@ -1,17 +1,15 @@
 """Standalone automatic mission entry point."""
-import sys
-
 import click
 from loguru import logger
 
 from .cli import CliParser
-from .mission import run_mission
+from .app import run_mission
+from .run_logging import configure_logging
 
 
 def main(argv=None) -> int:
-    logger.remove()
-    logger.add(sys.stderr, level='INFO', format='{message}')
     try:
+        configure_logging()
         options = CliParser().parse(argv)
         return options if isinstance(options, int) else run_mission(options)
     except click.ClickException as error:

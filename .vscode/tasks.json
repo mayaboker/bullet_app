@@ -5,7 +5,7 @@
       "label": "Bullet: Run app (manual approval, choose mission)",
       "icon": { "id": "play", "color": "terminal.ansiGreen" },
       "type": "shell",
-      "command": "uv run --locked bullet-app --mode manual --mission ${input:mission}",
+      "command": "uv run --locked bullet-app --config src/bullet_app/app.sitl.yaml --mode manual --mission ${input:mission}",
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": [],
       "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
@@ -18,7 +18,7 @@
         "color": "terminal.ansiGreen"
       },
       "type": "shell",
-      "command": "uv run --locked bullet-app --mode auto --mission ${input:mission}",
+      "command": "uv run --locked bullet-app --config src/bullet_app/app.sitl.yaml --mode auto --mission ${input:mission}",
       "options": {
         "cwd": "${workspaceFolder}"
       },

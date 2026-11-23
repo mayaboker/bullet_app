@@ -2,10 +2,14 @@ from types import SimpleNamespace
 
 import pytest
 from beta_client.timesync import TimeSyncStatus
+from los_tracking.types import ControlDemand, State
 
+from bullet_app.blackboard import StepContext
 from bullet_app.cli import DEFAULT_TARGET_PROFILE
-from bullet_app.flight import Phase
+from bullet_app.flight import Action, Phase
 from bullet_app.target import TargetMission, _quaternion
+from bullet_app.missions.target_hit import _demand_command
+from conftest import tick
 
 
 def _packet(now, box=None):
@@ -26,15 +30,16 @@ def _sync(mission, now, offset_ns=0):
 
 def test_target_starts_without_preflight_feed_and_allows_one_attempt():
     mission = TargetMission(DEFAULT_TARGET_PROFILE)
-    mission.step(1., 0., 1., False, True)
-    mission.step(13., 0., 13., False, True)
+    assert mission.height_m == 20.0
+    tick(mission, 1., 0., 1., False, True)
+    tick(mission, 13., 0., 13., False, True)
     _sync(mission, 13.)
-    mission.request('arm', 13.1)
-    mission.step(13.2, 0., 13.2, True, True)
-    mission.request('start', 13.3, 0.)
+    mission.request(Action.ARM, 13.1)
+    tick(mission, 13.2, 0., 13.2, True, True)
+    mission.request(Action.START, 13.3, 0.)
     assert mission.phase == Phase.TAKEOFF
     with pytest.raises(ValueError, match='one attempt'):
-        mission.request('start', 14., 0.)
+        mission.request(Action.START, 14., 0.)
 
 
 def test_target_enters_search_after_hover_without_bbox():
@@ -45,12 +50,13 @@ def test_target_enters_search_after_hover_without_bbox():
     mission.started = True
     for index in range(1, 130):
         now = 100. + index * .1
-        mission.sample = _sample(now, altitude=10.)
-        mission.step(now, 10., now, True, False)
+        mission.blackboard.telemetry = _sample(now, altitude=mission.height_m)
+        tick(mission, now, mission.height_m, now, True, False)
         if mission.phase == Phase.SEARCH:
             break
     assert mission.phase == Phase.SEARCH
-    assert mission.bbox is None
+    assert mission.blackboard.visual.bbox is None
+    assert 105. <= now < 106.
 
 
 def test_target_search_failure_lands_and_contact_disarms():
@@ -59,24 +65,74 @@ def test_target_search_failure_lands_and_contact_disarms():
     mission.ground_altitude_m = 0.
     mission.height_m = 10.
     mission.search_started = 1.
-    mission.sample = _sample(62.)
-    command = mission.step(62., 10., 62., True, True)
+    mission.blackboard.telemetry = _sample(62.)
+    command = tick(mission, 62., 10., 62., True, True)
     assert mission.phase == Phase.LAND and mission.result == 'target not found'
     assert command.arm
     other = TargetMission(DEFAULT_TARGET_PROFILE)
     other.phase = Phase.LOS
     other.ground_altitude_m = 0.
     other.height_m = 10.
-    other.sample = _sample(20.)
-    other.observe_contact({'target_id': 'red_truck', 'drone_id': 'drone_1'})
-    command = other.step(20., 10., 20., True, True)
+    other.blackboard.telemetry = _sample(20.)
+    other.observe_simulation_contact({'target_id': 'red_truck', 'drone_id': 'drone_1'})
+    command = tick(other, 20., 10., 20., True, True)
     assert other.phase == Phase.DISARMING and other.result == 'hit'
     assert not command.arm and command.throttle == 1000
+
+
+def test_commit_without_simulation_contact_lands_after_timeout():
+    mission = TargetMission(DEFAULT_TARGET_PROFILE, mode='auto')
+    mission.phase = Phase.COMMIT
+    mission.ground_altitude_m = 0.
+    mission.height_m = 10.
+    mission.los_started = 100.
+    mission.commit_started = 100.
+    mission.last_altitude_at = 103.1
+    mission.blackboard.telemetry = _sample(103.1)
+    mission.blackboard.telemetry.heartbeat = SimpleNamespace(base_mode=128)
+    mission._sensor_inputs = lambda _: None
+    mission.navigator.update = lambda *_args, **_kwargs: SimpleNamespace(
+        state=State.COMMIT, command=None, valid_until_s=0.)
+    command = mission._target_step(StepContext(mission.blackboard, 103.1))
+    assert mission.phase == Phase.LAND
+    assert mission.result == 'contact not confirmed'
+    assert command.arm
 
 
 def test_mavlink_quaternion_is_converted_to_bullet_axes():
     q = _quaternion(0., 0., 0.5)
     assert q[2] < 0
+
+
+def test_los_thrust_mapping_uses_captured_hover_pwm():
+    mission = TargetMission(DEFAULT_TARGET_PROFILE)
+    hover_thrust = mission.config.vehicle.mass_kg * mission.config.vehicle.gravity_m_s2
+    demand = lambda thrust: ControlDemand(0., 0., 0., thrust)
+    assert _demand_command(demand(hover_thrust), mission.config, hover_pwm=1540).throttle == 1540
+    assert _demand_command(demand(hover_thrust + 2.), mission.config, hover_pwm=1540).throttle > 1540
+    assert _demand_command(demand(hover_thrust - 2.), mission.config, hover_pwm=1540).throttle < 1540
+    assert _demand_command(demand(0.), mission.config, hover_pwm=1050).throttle == 1050
+    assert _demand_command(demand(mission.config.vehicle.max_thrust_n),
+                           mission.config, hover_pwm=1900).throttle == 2000
+
+
+def test_settle_to_los_retains_active_throttle_baseline():
+    mission = TargetMission(DEFAULT_TARGET_PROFILE)
+    mission.phase = Phase.SETTLE
+    mission.controller.throttle = 1540
+    mission.ground_altitude_m = 0.
+    mission._enter(Phase.LOS, 100.)
+    assert mission.los_hover_pwm == 1540
+    mission.controller.throttle = 1600
+    mission.blackboard.telemetry = _sample(100.02)
+    mission._sensor_inputs = lambda _: None
+    mission.navigator.update = lambda *_args, **_kwargs: SimpleNamespace(
+        state=State.TRACK, command=ControlDemand(0., 0., 0.,
+            mission.config.vehicle.mass_kg * mission.config.vehicle.gravity_m_s2),
+        valid_until_s=100.04)
+    command = tick(mission, 100.02, 10., 100.02, True, True)
+    assert command.throttle == 1540
+    assert mission.los_hover_pwm == 1540
 
 
 def test_los_uses_mavlink_samples_and_bbox_to_command_forward_pitch():
@@ -88,14 +144,16 @@ def test_los_uses_mavlink_samples_and_bbox_to_command_forward_pitch():
     command = None
     for index in range(1, 23):
         now = 100. + index * .02
-        mission.sample = _sample(now - .005)
+        mission.blackboard.telemetry = _sample(now - .005)
         _sync(mission, now)
         packet = _packet(now - .01, dict(x=300, y=220, width=40, height=40))
         packet['sequence'] = index
         mission.observe_bbox(packet, now)
-        command = mission.step(now, 10., now - .005, True, True)
+        command = tick(mission, now, 10., now - .005, True, True)
     assert mission.phase == Phase.LOS
     assert command.arm and command.pitch > 1500
+    assert mission.blackboard.features.navigation_input is not None
+    assert mission.blackboard.features.navigation_result is not None
 
 
 def test_attitude_clock_mapping_uses_timesync_offset():
@@ -104,7 +162,7 @@ def test_attitude_clock_mapping_uses_timesync_offset():
         now = 100. + index * .02
         sample = _sample(now - .01)
         sample.attitude.time_boot_ms = round(index * 19.6)
-        mission.sample = sample
+        mission.blackboard.telemetry = sample
         offset_ns = round((sample.attitude_at - sample.attitude.time_boot_ms / 1000) * 1e9)
         _sync(mission, now, offset_ns)
         mission._observe_telemetry(now)
@@ -119,9 +177,9 @@ def test_los_lands_when_raw_attitude_source_becomes_stale():
     mission.ground_altitude_m = 0.
     mission.height_m = 10.
     mission.los_started = 100.
-    mission.sample = _sample(100.)
-    mission.step(100., 10., 100., True, True)
-    mission.step(100.21, 10., 100., True, True)
+    mission.blackboard.telemetry = _sample(100.)
+    tick(mission, 100., 10., 100., True, True)
+    tick(mission, 100.21, 10., 100., True, True)
     assert mission.phase == Phase.LAND
     assert mission.result == 'LOS attitude source stale'
 
@@ -132,7 +190,7 @@ def test_sync_gates_arm_and_faults_after_startup_timeout():
     mission.observe_timesync(None, 1.)
     assert mission.readiness == 0
     with pytest.raises(ValueError, match='TIMESYNC'):
-        mission.request('arm', 1.1)
+        mission.request(Action.ARM, 1.1)
     mission.observe_timesync(None, 6.01)
     assert mission.phase == Phase.FAULT
     assert mission.fault_reason == 'MAVLink TIMESYNC unavailable'
@@ -160,7 +218,7 @@ def test_attitude_mapping_uses_vehicle_boot_time_not_arrival():
     sample = _sample(100.)
     sample.attitude.time_boot_ms = 5000
     sample.attitude_at = 100.03
-    mission.sample = sample
+    mission.blackboard.telemetry = sample
     _sync(mission, 100.03, 95_000_000_000)
     mission._observe_telemetry(100.03)
     assert mission.sensor_estimator.attitude_latest.timestamp_s == 100.

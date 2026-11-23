@@ -5,7 +5,8 @@ from pathlib import Path
 
 import yaml
 
-from .base import MAX_HEIGHT_M, MIN_HEIGHT_M, MissionBase, Phase
+from ..blackboard import StepContext
+from .base import MAX_HEIGHT_M, MIN_HEIGHT_M, MissionBase, Mode, Phase
 
 DEFAULT_PROFILE = Path(__file__).with_name('hover_land.yaml')
 
@@ -30,8 +31,16 @@ class HoverLandSettings:
 
 
 class HoverLandMission(MissionBase):
-    def __init__(self, settings: HoverLandSettings, mode='manual'):
-        super().__init__(mode, 'hover-land', settings.altitude_m, settings.hover_duration_s)
+    def __init__(self, settings: HoverLandSettings, mode: Mode | str = Mode.MANUAL, blackboard=None):
+        super().__init__(mode, 'hover-land', settings.altitude_m, settings.hover_duration_s, blackboard)
 
-    def _on_hover_complete(self, now):
-        self._enter(Phase.LAND, now)
+    def request_height(self, height_m: float) -> None:
+        """Reject height edits because the hover profile fixes the flight height."""
+        raise ValueError('Height is fixed by the mission profile')
+
+    def vision_alive(self, now: float) -> bool:
+        """Report ready because hover-land does not use camera detections."""
+        return True
+
+    def _on_hover_complete(self, context: StepContext) -> None:
+        self._enter(Phase.LAND, context.now_s)

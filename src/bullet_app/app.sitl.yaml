@@ -1,0 +1,52 @@
+# Betaflight SITL links for target-hit flights with simulator contact.
+betaflight:
+  # MSP carries RC commands and board identity.
+  msp:
+    # TCP selects the SITL MSP listener; serial is also supported by App.
+    type: tcp
+    # MSP listener host; used for TCP.
+    host: 127.0.0.1
+    # MSP listener port (1–65535); used for TCP.
+    port: 5761
+  # MAVLink carries telemetry and TIMESYNC.
+  mavlink:
+    # TCP selects the SITL MAVLink listener; serial is also supported by App.
+    type: tcp
+    # TCP endpoint in tcp:host:port format.
+    endpoint: tcp:127.0.0.1:5762
+    # Baud rate in bits/s; ignored for TCP.
+    baudrate: 57600
+# Enable simulator-only target contact for SITL missions.
+simulation:
+  # True subscribes to contact for target-hit; false disables it.
+  enabled: true
+  # ZeroMQ endpoint for simulator contact events; required when enabled.
+  contact_endpoint: tcp://127.0.0.1:5555
+# Optional best-effort ZMQ publisher for mcap_bagger; all-zero rates keep it off.
+telemetry_publisher:
+  # Loopback TCP PUB bind endpoint; match bagger channel endpoints.
+  endpoint: tcp://127.0.0.1:5558
+  # Each topic has its own FPS (0 disables, positive values up to 50 repeat the latest value).
+  topics:
+    # Betaflight heartbeat and local receive time, FPS.
+    telemetry/heartbeat: 0
+    # Betaflight attitude and local receive time/rate, FPS.
+    telemetry/attitude: 0
+    # Betaflight VFR_HUD and local receive time/rate, FPS.
+    telemetry/vfr_hud: 0
+    # GPS_RAW_INT and local receive time/rate, FPS.
+    telemetry/gps_raw_int: 0
+    # GLOBAL_POSITION_INT and local receive time/rate, FPS.
+    telemetry/global_position_int: 0
+    # MAVLink TIMESYNC estimate, FPS.
+    telemetry/timesync: 0
+    # Latest accepted visual bounding box, FPS.
+    visual/bbox: 0
+    # Simulator target-contact boolean, FPS.
+    simulation/target_contact: 0
+    # Latest target navigation input, FPS.
+    features/navigation_input: 0
+    # Latest target navigation result, FPS.
+    features/navigation_result: 0
+    # Current Bullet View heartbeat liveness boolean, FPS.
+    view/alive: 0

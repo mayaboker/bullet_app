@@ -5,7 +5,7 @@ from bullet_app.sensor_estimator import MAX_PREDICTION_S, TargetSensorEstimator
 from los_tracking import LosNavigator
 from los_tracking.config import NavigatorConfig
 from los_tracking.geometry import euler
-from los_tracking.types import AttitudeSample, BarometerSample, State, TargetObservation
+from los_tracking.types import AttitudeSample, BarometerSample, NavigationInput, State, TargetObservation
 
 
 def _attitude(sequence, stamp, yaw=0.0):
@@ -72,6 +72,41 @@ def test_prediction_expires_and_missed_ticks_are_counted():
     assert late.attitude is not None and estimator.skipped_ticks == 1
     stale = estimator.tick(10.0 + MAX_PREDICTION_S + .02)
     assert stale.attitude is None and stale.barometer is None
+
+
+def test_fresh_47_hz_barometer_does_not_go_stale_on_fixed_tick_phase():
+    config = NavigatorConfig.from_yaml(DEFAULT_TARGET_PROFILE)
+    estimator = TargetSensorEstimator(config.tuning)
+    navigator = LosNavigator(config)
+    for index in range(1, 47 * 3):
+        now = 100. + index / 47 + .0102
+        sensor_index = int((now - 100. - .01) * 47)
+        sensor_time = 100. + sensor_index / 47 + .01
+        estimator.push_barometer(_barometer(sensor_index, sensor_time))
+        estimate = estimator.tick(now)
+        attitude = _attitude(index, now)
+        result = navigator.update(NavigationInput(None, estimate.barometer, attitude),
+                                  now_s=now, enabled=True)
+        assert result.state != State.FAULT, (result.reason, now - sensor_time)
+    assert estimator.barometer_interpolations > 0
+
+
+def test_measurement_ahead_of_tick_is_interpolated_from_previous_sample():
+    config = NavigatorConfig.from_yaml(DEFAULT_TARGET_PROFILE)
+    estimator = TargetSensorEstimator(config.tuning)
+    estimator.push_attitude(_attitude(1, 10.0))
+    estimator.push_barometer(_barometer(1, 10.0, 10.0))
+    estimator.tick(10.0)
+    estimator.push_attitude(_attitude(2, 10.03, yaw=.3))
+    estimator.push_barometer(_barometer(2, 10.03, 12.0))
+    estimate = estimator.tick(10.039)
+    assert estimate.attitude is not None and estimate.attitude.timestamp_s == 10.02
+    assert estimate.barometer is not None and estimate.barometer.timestamp_s == 10.02
+    assert 10.0 < estimate.barometer.altitude_m < 12.0
+    assert 0.0 < euler(estimate.attitude.orientation_xyzw)[2] < .3
+    assert estimator.attitude_interpolations == 1
+    assert estimator.barometer_interpolations == 1
+    assert estimator.barometer_missing_ticks == 0
 
 
 def test_attitude_smoothing_and_short_prediction():

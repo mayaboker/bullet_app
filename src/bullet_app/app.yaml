@@ -1,0 +1,57 @@
+# Betaflight links used by Bullet App. Both links are independent, so a setup
+# may use TCP for one protocol and serial for the other.
+betaflight:
+  # MSP carries RC commands and the board-identity request to Betaflight.
+  msp:
+    # Select "tcp" for SITL or "serial" for an MSP-enabled serial port.
+    type: tcp
+    # TCP host; used only when msp.type is "tcp".
+    host: 127.0.0.1
+    # TCP port (1–65535); used only when msp.type is "tcp".
+    port: 5761
+    # Serial device path; set this to the MSP port when msp.type is "serial".
+    device: /dev/ttyUSB0
+    # MSP serial baud rate in bits/s; used only when msp.type is "serial".
+    baudrate: 115200
+  # MAVLink carries Betaflight heartbeat, altitude, attitude, and TIMESYNC.
+  mavlink:
+    # Select "tcp" for a TCP endpoint or "serial" for a MAVLink serial device.
+    type: tcp
+    # TCP: "tcp:host:port". Serial: device path such as "/dev/ttyUSB1".
+    endpoint: tcp:127.0.0.1:5762
+    # Serial MAVLink baud rate in bits/s; ignored for a TCP endpoint.
+    baudrate: 57600
+# Simulator target contact is optional; hardware runs leave this disabled.
+simulation:
+  # Set true only when a simulator publishes target contact events; default if omitted: false.
+  enabled: false
+  # ZeroMQ contact publisher endpoint; used only when simulation.enabled is true.
+  contact_endpoint: tcp://127.0.0.1:5555
+# Optional best-effort ZMQ publisher for mcap_bagger; all-zero rates keep it off.
+telemetry_publisher:
+  # Loopback TCP PUB bind endpoint; match bagger channel endpoints.
+  endpoint: tcp://127.0.0.1:5558
+  # Each topic has its own FPS (0 disables, positive values up to 50 repeat the latest value).
+  topics:
+    # Betaflight heartbeat and local receive time, FPS.
+    telemetry/heartbeat: 0
+    # Betaflight attitude and local receive time/rate, FPS.
+    telemetry/attitude: 0
+    # Betaflight VFR_HUD and local receive time/rate, FPS.
+    telemetry/vfr_hud: 0
+    # GPS_RAW_INT and local receive time/rate, FPS.
+    telemetry/gps_raw_int: 0
+    # GLOBAL_POSITION_INT and local receive time/rate, FPS.
+    telemetry/global_position_int: 0
+    # MAVLink TIMESYNC estimate, FPS.
+    telemetry/timesync: 0
+    # Latest accepted visual bounding box, FPS.
+    visual/bbox: 0
+    # Simulator target-contact boolean, FPS.
+    simulation/target_contact: 0
+    # Latest target navigation input, FPS.
+    features/navigation_input: 0
+    # Latest target navigation result, FPS.
+    features/navigation_result: 0
+    # Current Bullet View heartbeat liveness boolean, FPS.
+    view/alive: 0
