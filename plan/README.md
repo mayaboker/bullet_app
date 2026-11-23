@@ -76,3 +76,5 @@
 | [0072 Target-hit 30 m descent](0072-target-hit-30m-descent.md) | Start target-hit at 30 m and request faster early LOS descent. | Implemented; 113 App and 20 focused LOS tests passed, final SITL hit | Pending (no commit requested) |
 | [0073 View requested flight-session restart](0073-view-restart.md) | Recreate a manual SITL flight session while keeping the View MAVLink link alive. | Implemented; 116 App tests passed | Pending (no commit requested) |
 | [0074 Main-owned manual restart retry](0074-main-restart-retry.md) | Retry a View-requested manual FCU session from `main()` after safe cleanup. | Implemented; 118 App tests passed | Pending (no commit requested) |
+| [0075 Slower yaw settle before LOS](0075-slower-yaw-settle.md) | Require a steadier, longer centered hold before LOS tracking starts. | Implemented; 34 focused App tests passed | Pending (no commit requested) |
+| [0076 Align LOS yaw with camera frame](0076-los-yaw-frame-alignment.md) | Correct yaw sign in LOS bearing and heading calculations after a 90° spawn. | Implemented; 121 App tests passed and live SITL hit | Pending (no commit requested) |

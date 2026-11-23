@@ -1,9 +1,10 @@
-from math import radians
+from math import radians, tan
 from types import SimpleNamespace
 
 import pytest
 from beta_client.timesync import TimeSyncStatus
 from los_tracking.types import ControlDemand, State
+from los_tracking.geometry import euler, world_bearing
 
 from bullet_app.blackboard import StepContext
 from bullet_app.cli import DEFAULT_TARGET_PROFILE
@@ -102,7 +103,27 @@ def test_commit_without_simulation_contact_lands_after_timeout():
 
 def test_mavlink_quaternion_is_converted_to_bullet_axes():
     q = _quaternion(0., 0., 0.5)
-    assert q[2] < 0
+    assert euler(q)[2] == pytest.approx(0.5)
+
+
+def test_los_world_bearing_stays_fixed_as_camera_yaws_toward_target():
+    camera = TargetMission(DEFAULT_TARGET_PROFILE).config.camera
+    target_angle = 0.1
+    width = 16
+    centered = (camera.cx_px - width / 2, camera.cy_px, width, 20)
+    shifted = (camera.cx_px + camera.fx_px * tan(target_angle) - width / 2,
+               camera.cy_px, width, 20)
+    initial = world_bearing(centered, camera, _quaternion(0., 0., 0.), 0.)[1]
+    after_yaw = world_bearing(shifted, camera, _quaternion(0., 0., target_angle), 0.)[1]
+    assert after_yaw == pytest.approx(initial, abs=1e-12)
+
+
+def test_search_sweep_accumulates_observed_positive_yaw():
+    mission = TargetMission(DEFAULT_TARGET_PROFILE)
+    mission.phase = Phase.SEARCH
+    mission._update_search_yaw(_sample(1., yaw=0.2))
+    mission._update_search_yaw(_sample(2., yaw=0.5))
+    assert mission.swept == pytest.approx(0.3)
 
 
 def test_los_thrust_mapping_uses_captured_hover_pwm():
@@ -148,6 +169,37 @@ def test_settle_to_los_retains_active_throttle_baseline():
     command = tick(mission, 100.02, 10., 100.02, True, True)
     assert command.throttle == 1540
     assert mission.los_hover_pwm == 1540
+
+
+def test_settle_requires_one_second_below_one_degree_per_second():
+    mission = TargetMission(DEFAULT_TARGET_PROFILE)
+    mission.phase = Phase.CENTER
+    mission.search_started = 100.
+    mission.ground_altitude_m = 0.
+    mission._sensor_inputs = lambda _: None
+    mission.navigator.update = lambda *_args, **_kwargs: SimpleNamespace(
+        state=State.ACQUIRE, command=None, valid_until_s=0.)
+
+    def step(now, yaw_speed_deg_s):
+        mission.blackboard.telemetry = _sample(now, altitude=mission.height_m)
+        mission.blackboard.telemetry.attitude.yawspeed = radians(yaw_speed_deg_s)
+        mission.observe_bbox(_packet(now, dict(x=312, y=220, width=16, height=20)), now)
+        tick(mission, now, mission.height_m, now, True, True)
+
+    step(100., 4.)
+    assert mission.phase == Phase.SETTLE
+    assert mission.settled_at is None
+    step(100.1, 0.8)
+    assert mission.settled_at == 100.1
+    step(100.9, 0.8)
+    assert mission.phase == Phase.SETTLE
+    step(101., 1.2)
+    assert mission.settled_at is None
+    step(101.1, 0.8)
+    step(102.09, 0.8)
+    assert mission.phase == Phase.SETTLE
+    step(102.11, 0.8)
+    assert mission.phase == Phase.LOS
 
 
 def test_los_uses_mavlink_samples_and_bbox_to_command_forward_pitch():

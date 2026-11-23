@@ -20,8 +20,8 @@ SEARCH_TIMEOUT_S = 60.0
 SEARCH_CIRCLE_RAD = 2 * pi
 CENTER_TOLERANCE_PX = 10
 CENTER_GAIN_S_INV = 1.0
-SETTLE_S = 0.3
-SETTLE_RATE_RAD_S = radians(5)
+SETTLE_S = 1.0
+SETTLE_RATE_RAD_S = radians(1)
 APPROACH_TIMEOUT_S = 120.0
 COMMIT_TIMEOUT_S = 3.0
 MAX_BBOX_AGE_S = 0.2
@@ -55,12 +55,12 @@ def _wrap(angle):
 
 
 def _quaternion(roll, pitch, yaw):
-    """Invert the SITL MAVLink FRD/NED attitude into Bullet FLU/Z-up."""
+    """Map SITL attitude to the camera/world axes used by LOS guidance."""
     cr, sr = cos(roll / 2), sin(roll / 2)
     cp, sp = cos(pitch / 2), sin(pitch / 2)
     cy, sy = cos(yaw / 2), sin(yaw / 2)
-    return (sr * cp * cy - cr * sp * sy, -(cr * sp * cy + sr * cp * sy),
-            -(cr * cp * sy - sr * sp * cy), cr * cp * cy + sr * sp * sy)
+    return (sr * cp * cy + cr * sp * sy, -(cr * sp * cy - sr * cp * sy),
+            cr * cp * sy + sr * sp * cy, cr * cp * cy - sr * sp * sy)
 
 
 def _yaw_pwm(rate_rad_s):
@@ -233,7 +233,7 @@ class TargetMission(MissionBase):
     def _update_search_yaw(self, sample):
         if sample.attitude is None or sample.attitude_at <= 0:
             return
-        yaw = -sample.attitude.yaw
+        yaw = sample.attitude.yaw
         if self.last_yaw is not None and self.phase in (Phase.SEARCH, Phase.CENTER, Phase.SETTLE):
             self.swept += max(0.0, _wrap(yaw - self.last_yaw))
         self.last_yaw = yaw
