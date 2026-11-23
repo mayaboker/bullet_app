@@ -24,4 +24,4 @@ The receipt-time fallback applies only when the mapped time is future-dated by n
 
 ## Status
 
-Implemented. Implementation commit: Pending.
+Implemented. Implementation commit: `1e3089b`.
