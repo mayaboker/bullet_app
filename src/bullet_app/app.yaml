@@ -22,6 +22,8 @@ betaflight:
     # Serial MAVLink baud rate in bits/s; ignored for a TCP endpoint.
     baudrate: 57600
 # Simulator target contact is optional; hardware runs leave this disabled.
+# View-requested manual SITL restart; false by default and on hardware.
+view_restart_enabled: false
 simulation:
   # Set true only when a simulator publishes target contact events; default if omitted: false.
   enabled: false
@@ -31,6 +33,8 @@ simulation:
 telemetry_publisher:
   # Loopback TCP PUB bind endpoint; match bagger channel endpoints.
   endpoint: tcp://127.0.0.1:5558
+  # Record each successfully sent MSP RC frame; false keeps this event stream off.
+  record_msp_rc: false
   # Each topic has its own FPS (0 disables, positive values up to 50 repeat the latest value).
   topics:
     # Betaflight heartbeat and local receive time, FPS.

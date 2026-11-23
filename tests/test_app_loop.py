@@ -5,6 +5,7 @@ import pytest
 import yaml
 
 from bullet_app import app
+from beta_client.entities import RcChannels
 from bullet_app.blackboard import Blackboard, StepContext
 from bullet_app.config import DEFAULT_CONFIG
 from bullet_app.missions import Command, Mode, Phase
@@ -180,10 +181,19 @@ def test_auto_run_publishes_before_result_and_final_disarm(monkeypatch, tmp_path
         def __exit__(self, *_):
             events.append('publisher closed')
 
+        def enqueue_rc(self, channels, phase, sent_at):
+            assert sent_at == 123 and phase in ('disarmed', 'fault')
+            events.append(f'record {channels.values[2]}')
+
     monkeypatch.setattr(app, 'TelemetryPublisher', Publisher)
     monkeypatch.setattr(app, 'read_board_identifier', lambda *_: 'SITL')
     monkeypatch.setattr(app.time, 'monotonic', lambda: 100.0)
-    monkeypatch.setattr(app, '_send_command', lambda _transport, command: events.append(f'send {command.throttle}'))
+    def fake_send(_transport, command):
+        events.append(f'send {command.throttle}')
+        return RcChannels((command.roll, command.pitch, command.throttle, command.yaw,
+                           2000 if command.arm else 1000, 2000, 1000, 1000)), 123
+
+    monkeypatch.setattr(app, '_send_command', fake_send)
 
     config_path = DEFAULT_CONFIG
     if serial or recording:
@@ -195,6 +205,7 @@ def test_auto_run_publishes_before_result_and_final_disarm(monkeypatch, tmp_path
                 'type': 'serial', 'endpoint': '/dev/ttyUSB1', 'baudrate': 57600}
         if recording:
             data['telemetry_publisher']['topics'] = {'view/alive': 1}
+            data['telemetry_publisher']['record_msp_rc'] = True
         config_path.write_text(yaml.safe_dump(data))
     options = SimpleNamespace(mission='hover-land', config=config_path,
                               mavlink_endpoint=None, msp_host=None, msp_port=None,
@@ -204,7 +215,12 @@ def test_auto_run_publishes_before_result_and_final_disarm(monkeypatch, tmp_path
                             ('msp serial', '/dev/ttyUSB0', 115200)] if serial else [
                             ('mavlink', 'tcp:127.0.0.1:5762', None),
                             ('msp tcp', '127.0.0.1', 5761)])
-    command_events = ['send 1000', 'observed 1000'] if stale else ['step', 'send 1300', 'observed 1300']
+    command_events = (['send 1000'] if stale else ['step', 'send 1300'])
+    if recording:
+        command_events.append('record 1000' if stale else 'record 1300')
+    command_events.append('observed 1000' if stale else 'observed 1300')
+    final_commands = [item for _ in range(3) for item in
+                      (('send 1000', 'record 1000') if recording else ('send 1000',))]
     assert events == (['publisher constructed', 'publisher started'] if recording else []) + [
         'poll', *command_events, 'publish', 'diagnostics',
-        'send 1000', 'send 1000', 'send 1000'] + (['publisher closed'] if recording else [])
+        *final_commands] + (['publisher closed'] if recording else [])

@@ -31,7 +31,18 @@ def test_packaged_config_keeps_existing_tcp_connections():
         ConnectionType.TCP, 'tcp:127.0.0.1:5762', 57600)
     assert not config.simulation.enabled
     assert not config.telemetry_publisher.enabled
+    assert not config.telemetry_publisher.record_msp_rc
     assert config.telemetry_publisher.endpoint == 'tcp://127.0.0.1:5558'
+    assert not config.view_restart_enabled
+
+
+def test_view_restart_config_is_explicit_bool(tmp_path):
+    path = tmp_path / 'app.yaml'
+    path.write_text(SERIAL_CONFIG + 'view_restart_enabled: true\n')
+    assert AppConfig.from_yaml(path).view_restart_enabled
+    path.write_text(SERIAL_CONFIG + 'view_restart_enabled: 1\n')
+    with pytest.raises(ValueError, match='view_restart_enabled'):
+        AppConfig.from_yaml(path)
 
 
 def test_publisher_config_is_opt_in_and_rates_are_independent(tmp_path):
@@ -48,6 +59,21 @@ def test_publisher_config_is_opt_in_and_rates_are_independent(tmp_path):
         'telemetry/attitude': 25.0, 'view/alive': 2.5, 'visual/bbox': 0.0}
     assert needs_timesync(config.telemetry_publisher)
     assert not needs_timesync(AppConfig.from_yaml(DEFAULT_CONFIG).telemetry_publisher)
+
+
+def test_msp_rc_event_stream_can_enable_publisher_without_sampled_topics(tmp_path):
+    path = tmp_path / 'app.yaml'
+    path.write_text(SERIAL_CONFIG + 'telemetry_publisher:\n'
+                    '  endpoint: tcp://127.0.0.1:5558\n'
+                    '  record_msp_rc: true\n'
+                    '  topics: {}\n')
+    publisher = AppConfig.from_yaml(path).telemetry_publisher
+    assert publisher.enabled and publisher.record_msp_rc
+    assert publisher.topics == ()
+    assert not needs_timesync(publisher)
+    path.write_text(path.read_text().replace('record_msp_rc: true', 'record_msp_rc: 1'))
+    with pytest.raises(ValueError, match='record_msp_rc'):
+        AppConfig.from_yaml(path)
 
 
 @pytest.mark.parametrize('topics,endpoint', (

@@ -79,19 +79,22 @@ Start the target scene and Bullet Visual, then run:
 uv run --locked bullet-app --config src/bullet_app/app.sitl.yaml --mode manual --mission target-hit
 ```
 
-The App VS Code mission tasks use this SITL config. The workspace target-hit stack selects it through its launch script. View sends Arm and Start. The drone climbs to the applied height (20 m by default), hovers five seconds, searches, centers, and follows LOS guidance. At LOS entry, App captures the current altitude-hold throttle and uses it as the nominal-hover baseline for LOS thrust demands. Tracker boxes are forwarded to View for frame-matched overlays. Validated simulator contact disarms and reports `hit`. Without enabled contact, Commit times out after three seconds and lands with `contact not confirmed`. Target-hit permits one attempt per App process. See the [target-hit guide](docs/target-hit-mission.md).
+The App VS Code mission tasks use this SITL config. The workspace target-hit stack selects it through its launch script. View sends Arm and Start. The drone climbs to the applied height (30 m by default) with a takeoff-only 4 m/s climb-speed ceiling that tapers near the target height, hovers five seconds, searches, centers, and follows LOS guidance. At LOS entry, App captures the current altitude-hold throttle and uses it as the nominal-hover baseline for LOS thrust demands. Tracker boxes are forwarded to View for frame-matched overlays. Validated simulator contact disarms and reports `hit`. Without enabled contact, Commit times out after three seconds and lands with `contact not confirmed`. Target-hit permits one attempt per App process. See the [target-hit guide](docs/target-hit-mission.md).
+
+LOS roll and pitch demands are converted to Angle mode RC values using the pinned Betaflight SITL profile's ACTUAL rate curve (45° angle limit, 70°/s center sensitivity, 670°/s maximum rate, zero expo). A different firmware rate profile needs a matching conversion before flight. The Bullet LOS profile starts its first track with a 1.5 m/s descent request and keeps a minimum 2.5 m/s downward request while a fresh tracked target remains below the elevation reference. Its 20° acquired-LOS deviation guard accommodates the longer 30 m descent; the 12° frame-to-frame association jump guard remains. In SITL, the 10° pitch and 30 m takeoff reached confirmed target contact; late vertical limiting still appeared.
 
 ## Configuration
 
 The bundled [app.yaml](src/bullet_app/app.yaml) selects independent MSP and MAVLink connections and disables simulator contact. The [SITL config](src/bullet_app/app.sitl.yaml) enables it. Copy either file and pass `--config path/to/app.yaml` for another setup; every field is documented beside its value. Select `tcp` or `serial` independently for MSP and MAVLink. Serial MSP uses `device` and `baudrate`; serial MAVLink uses a device `endpoint` and `baudrate`.
 
-`telemetry_publisher` in the same YAML binds `tcp://127.0.0.1:5558` for MCAP recording. All bundled topic rates are `0`, so the worker stays off. Set individual rates from `0` to `50` FPS; positive rates repeat the latest available value. For example, set `telemetry/attitude: 25` and `visual/bbox: 10`, then start `mcap_bagger` with matching channel topics and endpoint before App. The [publisher protocol guide](docs/telemetry-publishing.md) lists every topic, timestamp rule, and the three-frame ZMQ envelope.
+`telemetry_publisher` in the same YAML binds `tcp://127.0.0.1:5558` for MCAP recording. Bundled default rates are `0` and `record_msp_rc` is false, so the worker stays off. Set individual rates from `0` to `50` FPS; positive rates repeat the latest available value. Set `record_msp_rc: true` to record each successfully sent RC command on `control/msp_rc`, independent of sample rates. Start `mcap_bagger` with matching channel topics and endpoint before App. The [publisher protocol guide](docs/telemetry-publishing.md) lists every topic, timestamp rule, and the three-frame ZMQ envelope.
 
 Setting `telemetry/gps_raw_int` or `telemetry/global_position_int` above zero also requests that MAVLink message from Betaflight at the configured rate. The workspace mission stacks set both to 2 Hz and start SITL with virtual GPS. A hardware connection needs a configured GPS source; otherwise no GPS samples are published.
 
 | Setting | Default | Use |
 | --- | --- | --- |
 | `simulation.enabled` | `false` | Open simulator contact only for target-hit when true. |
+| `view_restart_enabled` | `false` | Permit View command 31013 to recreate a disarmed manual SITL session over TCP. The workspace SITL configs enable it. |
 | `simulation.contact_endpoint` | `tcp://127.0.0.1:5555` in bundled YAML | ZeroMQ contact publisher when enabled. |
 | `--contact-endpoint` | None | Override the contact endpoint; requires simulation enabled. |
 | `--bbox-endpoint` | `tcp://127.0.0.1:5560` | Tracker boxes for target-hit. |
@@ -127,7 +130,7 @@ uv run --locked pytest -q
 
 ## Troubleshooting
 
-If View disconnects for three seconds in manual mode, App disarms while idle or lands while airborne. Stale Betaflight telemetry faults and disarms; restart App before another attempt. If a contact override is rejected, enable `simulation.enabled` in the selected YAML. If target-hit reaches Commit without contact, it lands after three seconds.
+If View disconnects for three seconds in manual mode, App disarms while idle or lands while airborne. On SITL connection loss, App reports `restart_required`. After resetting the simulation, use **Restart Bullet App** in View to reload YAML and mission profile, clear runtime observations, and open a fresh flight session. App closes and reopens its View UDP link during the restart, then retries failed FCU connection attempts every second until they succeed or App stops. This is available only for manual TCP SITL configs with `view_restart_enabled: true`; an exited App process must be launched again. If a contact override is rejected, enable `simulation.enabled` in the selected YAML. If target-hit reaches Commit without contact, it lands after three seconds.
 
 ## Roadmap
 

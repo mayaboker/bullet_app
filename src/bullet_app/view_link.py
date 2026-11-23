@@ -25,10 +25,17 @@ RATE_PERIOD_S = 1.0
 ARM_COMMAND = 400
 START_COMMAND = 300
 HEIGHT_COMMAND = 31012
+RESTART_COMMAND = 31013
 LAND_COMMAND = 21
+APP_STATES = {'disabled': 0, 'ready': 1, 'restart_required': 2,
+              'restarting': 3, 'restart_failed': 4}
 FORCE_DISARM_MAGIC = 21196
 ACTION_IDS = {Action.ARM: 1, Action.DISARM: 2, Action.EMERGENCY: 3,
               Action.START: 4, Action.HEIGHT: 5, None: 0, Action.LAND: 6}
+
+
+class RestartRequested(Exception):
+    """A validated View request to replace the current manual flight session."""
 
 
 def _mavlink2(connection) -> None:
@@ -75,6 +82,8 @@ class ViewLink:
         self.last_result = None
         self.datum_m: float | None = None
         self.sitl_confirmed = False
+        self.app_state = 'disabled'
+        self.app_epoch = 0
 
     def __enter__(self):
         try:
@@ -105,7 +114,8 @@ class ViewLink:
         severity = 4 if event == 'low' else 6
         self.connection.mav.statustext_send(severity, description.encode('ascii')[:50])
 
-    def poll(self, mission: HoverLandMission | TargetMission, context: StepContext) -> None:
+    def poll(self, mission: HoverLandMission | TargetMission | None, context: StepContext,
+             restart_handler=None) -> None:
         now = context.now_s
         for _ in range(32):
             message = self.connection.recv_match(type=['HEARTBEAT', 'COMMAND_LONG'], blocking=False)
@@ -120,9 +130,24 @@ class ViewLink:
                 continue
             action = None
             try:
+                if message.command == RESTART_COMMAND:
+                    if not self.view_alive(now):
+                        raise ValueError('Bullet View heartbeat is stale')
+                    if any(not isfinite(getattr(message, f'param{i}')) or
+                           getattr(message, f'param{i}') != 0 for i in range(1, 8)):
+                        raise ValueError('Restart parameters must be zero')
+                    if restart_handler is None:
+                        raise ValueError('Restart unavailable')
+                    restart_handler()
+                    self.connection.mav.command_ack_send(RESTART_COMMAND,
+                        mavutil.mavlink.MAV_RESULT_IN_PROGRESS, 0, 0,
+                        VIEW_SYSTEM_ID, VIEW_COMPONENT_ID)
+                    raise RestartRequested
                 action, value = _command(message)
                 if not self.view_alive(now):
                     raise ValueError('Bullet View heartbeat is stale')
+                if mission is None:
+                    raise ValueError('Flight session unavailable')
                 if action == Action.HEIGHT:
                     mission.request_height(value)
                 else:
@@ -136,6 +161,29 @@ class ViewLink:
                 result = mavutil.mavlink.MAV_RESULT_ACCEPTED
             self.connection.mav.command_ack_send(message.command, result, 0, ACTION_IDS[action],
                                                  VIEW_SYSTEM_ID, VIEW_COMPONENT_ID)
+
+    def finish_restart(self, success: bool, reason: str = '') -> None:
+        result = (mavutil.mavlink.MAV_RESULT_ACCEPTED if success else
+                  mavutil.mavlink.MAV_RESULT_FAILED)
+        self.connection.mav.command_ack_send(RESTART_COMMAND, result, 0, 0,
+                                             VIEW_SYSTEM_ID, VIEW_COMPONENT_ID)
+        if reason:
+            self.connection.mav.statustext_send(4, reason.encode('utf-8')[:50])
+
+    def publish_app_status(self, now: float, *, session_ready: bool) -> None:
+        """Report session lifecycle even when Betaflight is offline."""
+        mav = self.connection.mav
+        elapsed_ms = int(now * 1000) % 2**32
+        if now - self.last_state_at >= STATE_PERIOD_S:
+            mav.named_value_float_send(elapsed_ms, b'APP_MODE', 1.0)
+            mav.named_value_float_send(elapsed_ms, b'APP_STATE', float(APP_STATES[self.app_state]))
+            mav.named_value_float_send(elapsed_ms, b'APP_EPOCH', float(self.app_epoch))
+            self.last_state_at = now
+        if not session_ready and now - self.last_heartbeat_at >= HEARTBEAT_PERIOD_S:
+            mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_QUADROTOR,
+                               mavutil.mavlink.MAV_AUTOPILOT_GENERIC, 0, 0,
+                               mavutil.mavlink.MAV_STATE_STANDBY, 3)
+            self.last_heartbeat_at = now
 
     def publish(self, mission: HoverLandMission | TargetMission, context: StepContext) -> None:
         now = context.now_s
@@ -168,6 +216,8 @@ class ViewLink:
                       ('APP_PHASE', float(PHASE_IDS[mission.phase])),
                       ('APP_MSN', float({'hover-land': 1, 'target-hit': 2}[mission.mission_kind])),
                       ('APP_RESULT', 0.0 if mission.result is None else 1.0 if mission.result == 'hit' else 2.0),
+                      ('APP_STATE', float(APP_STATES[self.app_state])),
+                      ('APP_EPOCH', float(self.app_epoch)),
                       ('VIS_READY', float(mission.vision_alive(now))))
             for name, value in values:
                 mav.named_value_float_send(elapsed_ms, name.encode('ascii'), value)

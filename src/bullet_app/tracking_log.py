@@ -63,7 +63,9 @@ class TrackingLog:
             'altitude_m={} yaw_rad={} los_state={} los_stage={} los_reason={} vision={} '
             'processed_seq={} processed_bbox={} aligned_image_age_s={} '
             'bearing_elevation_rad={} bearing_azimuth_rad={} reference_elevation_rad={} reference_azimuth_rad={} '
-            'ttc_s={} descent_feasible={} requested_tilt_rad={} measured_tilt_rad={} '
+            'ttc_s={} descent_feasible={} measured_vertical_speed_m_s={} '
+            'requested_vertical_speed_m_s={} vertical_reference_m_s={} '
+            'requested_tilt_rad={} measured_tilt_rad={} '
             'angle_limited={} vertical_limited={} thrust_saturated={} '
             'demand_roll_rad={} demand_pitch_rad={} demand_yaw_rate_rad_s={} demand_thrust_n={} '
             'rc_roll={} rc_pitch={} rc_yaw={} rc_throttle={} rc_arm={}',
@@ -82,6 +84,9 @@ class TrackingLog:
             None if diagnostics is None else _rounded(diagnostics.reference_azimuth_rad),
             None if diagnostics is None else _rounded(diagnostics.optical_ttc_s),
             None if diagnostics is None else diagnostics.descent_feasible,
+            None if diagnostics is None else _rounded(diagnostics.vertical_speed_m_s),
+            None if diagnostics is None else _rounded(diagnostics.requested_vertical_speed_m_s),
+            None if diagnostics is None else _rounded(diagnostics.vertical_reference_m_s),
             None if diagnostics is None else _rounded(diagnostics.requested_tilt_rad),
             None if diagnostics is None else _rounded(diagnostics.measured_tilt_rad),
             None if diagnostics is None else diagnostics.angle_limited,

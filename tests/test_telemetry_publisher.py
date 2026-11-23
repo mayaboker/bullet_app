@@ -4,7 +4,7 @@ from struct import unpack
 import socket
 import time
 
-from beta_client.entities import Attitude, GlobalPositionInt, GpsRawInt, TelemetrySnapshot
+from beta_client.entities import Attitude, GlobalPositionInt, GpsRawInt, RcChannels, TelemetrySnapshot
 from beta_client.timesync import TimeSyncStatus
 from los_tracking.types import Diagnostics, NavigationResult, State, TrackStage
 import msgpack
@@ -13,7 +13,7 @@ import zmq
 
 from bullet_app.blackboard import Blackboard
 from bullet_app.config import TelemetryPublisherConfig
-from bullet_app.telemetry_publisher import (TelemetryPublisher, _plain, _read_topic,
+from bullet_app.telemetry_publisher import (RC_QUEUE_CAPACITY, TelemetryPublisher, _plain, _read_topic,
                                             _timestamp_ns, needs_timesync)
 
 
@@ -152,3 +152,66 @@ def test_repeated_telemetry_keeps_source_timestamp_after_sync_expires():
     publisher._publish(socket, 'telemetry/attitude')
     assert socket.frames[0][1] == socket.frames[1][1]
     assert msgpack.unpackb(socket.frames[1][2], raw=False)['timestamp_source'] == 'mavlink'
+
+
+def test_rc_event_preserves_sent_channels_and_time():
+    publisher = TelemetryPublisher(TelemetryPublisherConfig('tcp://127.0.0.1:5558', (), True), Blackboard())
+    publisher._bridge_ns = 1_700_000_000_000_000_000
+    channels = RcChannels((1501, 1578, 1540, 1499, 2000, 2000, 1000, 1000))
+    publisher.enqueue_rc(channels, 'los', 123_456_789)
+
+    class Socket:
+        def send_multipart(self, frames, *, flags):
+            self.frames = frames
+            assert flags == zmq.NOBLOCK
+
+    socket = Socket()
+    publisher._publish_rc(socket, publisher.rc_queue.get_nowait())
+    topic, header, payload = socket.frames
+    assert topic == b'control/msp_rc'
+    assert unpack('<Q', header)[0] == 1_700_000_000_123_456_789
+    assert msgpack.unpackb(payload, raw=False) == {
+        'schema_version': 1, 'timestamp_source': 'send',
+        'value': {'sequence': 1, 'channels': list(channels.values),
+                  'phase': 'los', 'sent_monotonic_ns': 123_456_789}}
+
+
+def test_rc_queue_is_bounded_and_sequence_reveals_drops():
+    publisher = TelemetryPublisher(TelemetryPublisherConfig('tcp://127.0.0.1:5558', (), True), Blackboard())
+    channels = RcChannels((1500,) * 8)
+    for index in range(RC_QUEUE_CAPACITY + 1):
+        publisher.enqueue_rc(channels, 'hover', index)
+    assert publisher.rc_queue.qsize() == RC_QUEUE_CAPACITY
+    assert publisher.dropped == 1
+    publisher.rc_queue.get_nowait()
+    publisher.enqueue_rc(channels, 'hover', 999)
+    assert publisher.rc_queue.get_nowait()[0] == 2
+    assert publisher.rc_queue.get_nowait()[0] == 3
+    assert list(publisher.rc_queue.queue)[-1][0] == RC_QUEUE_CAPACITY + 2
+
+
+def test_event_only_publisher_delivers_and_flushes_on_close():
+    with socket.socket() as reserved:
+        reserved.bind(('127.0.0.1', 0))
+        endpoint = f'tcp://127.0.0.1:{reserved.getsockname()[1]}'
+    with zmq.Context() as context, context.socket(zmq.SUB) as subscriber:
+        subscriber.setsockopt(zmq.SUBSCRIBE, b'control/msp_rc')
+        subscriber.setsockopt(zmq.RCVTIMEO, 2000)
+        subscriber.connect(endpoint)
+        publisher = TelemetryPublisher(TelemetryPublisherConfig(endpoint, (), True), Blackboard())
+        with publisher:
+            channels = RcChannels((1500, 1578, 1540, 1500, 2000, 2000, 1000, 1000))
+            for _ in range(20):
+                publisher.enqueue_rc(channels, 'los', time.monotonic_ns())
+                if subscriber.poll(100):
+                    first = subscriber.recv_multipart()
+                    break
+            else:
+                pytest.fail('event-only publisher did not deliver an RC frame')
+            publisher.enqueue_rc(channels, 'disarming', time.monotonic_ns())
+        while True:
+            second = subscriber.recv_multipart()
+            if msgpack.unpackb(second[2], raw=False)['value']['phase'] == 'disarming':
+                break
+    first_sequence = msgpack.unpackb(first[2], raw=False)['value']['sequence']
+    assert msgpack.unpackb(second[2], raw=False)['value']['sequence'] > first_sequence

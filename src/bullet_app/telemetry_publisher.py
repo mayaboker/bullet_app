@@ -1,6 +1,7 @@
 """Best-effort blackboard sampling and MsgPack/ZMQ publication off the flight loop."""
 from dataclasses import fields, is_dataclass
 from enum import Enum
+from queue import Empty, Full, Queue
 from struct import pack
 import threading
 import time
@@ -15,6 +16,10 @@ EPOCH_2000_US = 946_684_800_000_000
 MAX_UNIX_NS = 2**64 - 1
 SEND_HWM = 16
 DROP_WARNING_PERIOD_S = 10.0
+MSP_RC_TOPIC = 'control/msp_rc'
+RC_QUEUE_CAPACITY = 256
+RC_PUBLISH_BATCH = 64
+IDLE_WAIT_S = 0.1
 SOURCE_TIMED_TOPICS = frozenset((
     'telemetry/attitude', 'telemetry/gps_raw_int',
     'telemetry/global_position_int', 'telemetry/timesync',
@@ -105,6 +110,9 @@ class TelemetryPublisher:
         self.config = config
         self.blackboard = blackboard
         self.stop_event = threading.Event()
+        self.wake_event = threading.Event()
+        self.rc_queue = Queue(maxsize=RC_QUEUE_CAPACITY)
+        self.rc_sequence = 0
         self.ready = threading.Event()
         self.thread = threading.Thread(target=self._run, name='blackboard-publisher')
         self.start_error = None
@@ -121,8 +129,22 @@ class TelemetryPublisher:
 
     def close(self):
         self.stop_event.set()
+        self.wake_event.set()
         if self.thread.ident is not None:
             self.thread.join()
+
+    def enqueue_rc(self, channels, phase: str, sent_monotonic_ns: int) -> None:
+        """Queue one successfully sent MSP frame without waiting for ZMQ or encoding."""
+        if not self.config.record_msp_rc:
+            return
+        self.rc_sequence += 1
+        try:
+            self.rc_queue.put_nowait((self.rc_sequence, tuple(channels.values), phase,
+                                      sent_monotonic_ns))
+        except Full:
+            self.dropped += 1
+        else:
+            self.wake_event.set()
 
     def __enter__(self):
         return self.start()
@@ -154,6 +176,18 @@ class TelemetryPublisher:
         except zmq.Again:
             self.dropped += 1
 
+    def _publish_rc(self, socket, record) -> None:
+        sequence, channels, phase, sent_monotonic_ns = record
+        payload = {'schema_version': 1, 'timestamp_source': 'send', 'value': {
+            'sequence': sequence, 'channels': list(channels), 'phase': phase,
+            'sent_monotonic_ns': sent_monotonic_ns}}
+        try:
+            socket.send_multipart((MSP_RC_TOPIC.encode(),
+                                   pack('<Q', sent_monotonic_ns + self._bridge_ns),
+                                   msgpack.packb(payload, use_bin_type=True)), flags=zmq.NOBLOCK)
+        except zmq.Again:
+            self.dropped += 1
+
     def _run(self):
         started = False
         try:
@@ -168,17 +202,29 @@ class TelemetryPublisher:
                     warned_at = time.monotonic()
                     started = True
                     self.ready.set()
-                    while not self.stop_event.is_set():
+                    while True:
                         now = time.monotonic()
                         for topic, deadline in due.items():
                             if now >= deadline:
                                 self._publish(socket, topic)
                                 due[topic] = now + periods[topic]
+                        for _ in range(RC_PUBLISH_BATCH):
+                            try:
+                                record = self.rc_queue.get_nowait()
+                            except Empty:
+                                break
+                            self._publish_rc(socket, record)
                         if self.dropped and now - warned_at >= DROP_WARNING_PERIOD_S:
-                            logger.warning('blackboard publisher dropped {} messages', self.dropped)
+                            logger.warning('telemetry publisher dropped {} messages', self.dropped)
                             self.dropped = 0
                             warned_at = now
-                        self.stop_event.wait(max(0, min(due.values()) - time.monotonic()))
+                        if self.stop_event.is_set() and self.rc_queue.empty():
+                            break
+                        timeout = max(0, min(due.values(), default=now + IDLE_WAIT_S) - time.monotonic())
+                        self.wake_event.wait(min(timeout, IDLE_WAIT_S))
+                        self.wake_event.clear()
+                    if self.dropped:
+                        logger.warning('telemetry publisher dropped {} messages', self.dropped)
         except Exception as error:
             if started:
                 logger.error('blackboard publisher stopped: {}', error)

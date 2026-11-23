@@ -13,7 +13,7 @@ from ..sensor_estimator import TargetSensorEstimator
 from ..tracking_log import TrackingLog
 from .base import Action, Command, MAX_HEIGHT_M, MIN_HEIGHT_M, MissionBase, Mode, Phase, Readiness
 
-TARGET_HEIGHT_M = 20.0
+TARGET_HEIGHT_M = 30.0
 TARGET_HOVER_S = 5.0
 SEARCH_RATE_RAD_S = radians(15)
 SEARCH_TIMEOUT_S = 60.0
@@ -29,7 +29,9 @@ PREFLIGHT_FEED_AGE_S = 0.5
 SITL_STREAM_ID = 'betaflight-sitl'
 RC_CENTER = 1500
 RC_HALF_RANGE = 500
-ANGLE_SCALE_RAD = pi / 4
+ANGLE_LIMIT_DEG = 45
+ACTUAL_CENTER_SENSITIVITY_DEG_S = 70
+ACTUAL_MAX_RATE_DEG_S = 670
 THROTTLE_MIN = 1050
 THROTTLE_MAX = 2000
 IDLE_FRACTION = 0.055
@@ -67,9 +69,20 @@ def _yaw_pwm(rate_rad_s):
     return round(RC_CENTER + RC_HALF_RANGE * stick * (1 if rate_rad_s >= 0 else -1))
 
 
+def _angle_pwm(angle_rad):
+    """Invert Angle mode's normalized ACTUAL rate curve (zero expo)."""
+    angle_deg = min(ANGLE_LIMIT_DEG, degrees(abs(angle_rad)))
+    target_rate = angle_deg * ACTUAL_MAX_RATE_DEG_S / ANGLE_LIMIT_DEG
+    rate_span = ACTUAL_MAX_RATE_DEG_S - ACTUAL_CENTER_SENSITIVITY_DEG_S
+    # Betaflight applies center * stick + rate_span * stick² before scaling to angle_limit.
+    stick = (-ACTUAL_CENTER_SENSITIVITY_DEG_S
+             + sqrt(ACTUAL_CENTER_SENSITIVITY_DEG_S ** 2 + 4 * rate_span * target_rate)) / (2 * rate_span)
+    return round(RC_CENTER + RC_HALF_RANGE * stick * (1 if angle_rad >= 0 else -1))
+
+
 def _demand_command(demand, config, *, hover_pwm):
-    roll = round(RC_CENTER + RC_HALF_RANGE * demand.roll_rad / ANGLE_SCALE_RAD)
-    pitch = round(RC_CENTER + RC_HALF_RANGE * demand.pitch_rad / ANGLE_SCALE_RAD)
+    roll = _angle_pwm(demand.roll_rad)
+    pitch = _angle_pwm(demand.pitch_rad)
     def betaflight_throttle(thrust_n):
         fraction = sqrt(min(1.0, max(0.0, thrust_n / config.vehicle.max_thrust_n)))
         stick = min(1.0, max(0.0, (fraction - IDLE_FRACTION) / (1 - IDLE_FRACTION)))

@@ -50,10 +50,11 @@ class SimulationConfig:
 class TelemetryPublisherConfig:
     endpoint: str | None = None
     topics: tuple[tuple[str, float], ...] = ()
+    record_msp_rc: bool = False
 
     @property
     def enabled(self) -> bool:
-        return any(fps > 0 for _, fps in self.topics)
+        return self.record_msp_rc or any(fps > 0 for _, fps in self.topics)
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,12 +63,14 @@ class AppConfig:
     mavlink: MavlinkConnection
     simulation: SimulationConfig = SimulationConfig()
     telemetry_publisher: TelemetryPublisherConfig = TelemetryPublisherConfig()
+    view_restart_enabled: bool = False
 
     @classmethod
     def from_yaml(cls, path: Path) -> 'AppConfig':
         """Read selected connection settings before any device is opened."""
         data = yaml.safe_load(path.read_text())
-        root = _mapping(data, 'config', {'betaflight', 'simulation', 'telemetry_publisher'}, {'betaflight'})
+        root = _mapping(data, 'config', {'betaflight', 'simulation', 'telemetry_publisher',
+                                         'view_restart_enabled'}, {'betaflight'})
         betaflight = _mapping(root['betaflight'], 'betaflight', {'msp', 'mavlink'}, {'msp', 'mavlink'})
         msp_data = _mapping(betaflight['msp'], 'betaflight.msp',
                             {'type', 'host', 'port', 'device', 'baudrate'}, {'type'})
@@ -88,7 +91,10 @@ class AppConfig:
         simulation = SimulationConfig(**simulation_data) if simulation_data is not None else SimulationConfig()
         _validate_simulation(simulation)
         publisher = _publisher_config(root['telemetry_publisher']) if 'telemetry_publisher' in root else TelemetryPublisherConfig()
-        return cls(msp, mavlink, simulation, publisher)
+        restart_enabled = root.get('view_restart_enabled', False)
+        if type(restart_enabled) is not bool:
+            raise ValueError('view_restart_enabled must be true or false')
+        return cls(msp, mavlink, simulation, publisher, restart_enabled)
 
     def with_overrides(self, *, msp_host: str | None = None, msp_port: int | None = None,
                        mavlink_endpoint: str | None = None,
@@ -108,11 +114,13 @@ class AppConfig:
         simulation = (replace(self.simulation, contact_endpoint=contact_endpoint)
                       if contact_endpoint is not None else self.simulation)
         _validate_simulation(simulation)
-        return AppConfig(msp, mavlink, simulation, self.telemetry_publisher)
+        return AppConfig(msp, mavlink, simulation, self.telemetry_publisher,
+                         self.view_restart_enabled)
 
 
 def _publisher_config(value) -> TelemetryPublisherConfig:
-    data = _mapping(value, 'telemetry_publisher', {'endpoint', 'topics'}, {'endpoint', 'topics'})
+    data = _mapping(value, 'telemetry_publisher', {'endpoint', 'topics', 'record_msp_rc'},
+                    {'endpoint', 'topics'})
     endpoint = data['endpoint']
     match = re.fullmatch(r'tcp://127\.0\.0\.1:([1-9][0-9]{0,4})', endpoint) if isinstance(endpoint, str) else None
     if match is None or int(match[1]) > 65535:
@@ -123,7 +131,11 @@ def _publisher_config(value) -> TelemetryPublisherConfig:
     for topic, fps in topics.items():
         if type(fps) not in (int, float) or not isfinite(fps) or not 0 <= fps <= MAX_PUBLISH_FPS:
             raise ValueError(f'{topic} FPS must be finite and between 0 and {MAX_PUBLISH_FPS}')
-    return TelemetryPublisherConfig(endpoint, tuple((topic, float(fps)) for topic, fps in topics.items()))
+    record_msp_rc = data.get('record_msp_rc', False)
+    if type(record_msp_rc) is not bool:
+        raise ValueError('telemetry_publisher.record_msp_rc must be true or false')
+    return TelemetryPublisherConfig(endpoint, tuple((topic, float(fps)) for topic, fps in topics.items()),
+                                    record_msp_rc)
 
 
 def _validate_simulation(simulation: SimulationConfig) -> None:

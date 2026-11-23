@@ -338,6 +338,7 @@ class MissionBase:
         landing = self.phase == Phase.LAND
         target = self.ground_altitude_m + (0.0 if landing else self.height_m)
         self.controller.update(target, context.altitude_m, altitude_at, landing=landing,
+                               takeoff=self.phase == Phase.TAKEOFF,
                                low_height_takeoff=(self.phase == Phase.TAKEOFF
                                                    and self.height_m < LOW_HEIGHT_TAKEOFF_THRESHOLD_M))
         self.last_altitude_at = altitude_at

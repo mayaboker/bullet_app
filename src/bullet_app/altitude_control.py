@@ -3,6 +3,7 @@
 SPEED_FILTER_ALPHA = 0.4
 ALTITUDE_KP = 0.6
 MAX_VERTICAL_SPEED_M_S = 1.5
+TAKEOFF_MAX_CLIMB_SPEED_M_S = 4.0
 LANDING_DESCENT_SPEED_M_S = 0.5
 VELOCITY_KP = 100.0
 VELOCITY_KI = 25.0
@@ -32,7 +33,7 @@ class AltitudeControl:
         self.throttle = HOVER_THROTTLE
 
     def update(self, target_m: float, altitude_m: float, timestamp_s: float, *, landing: bool,
-               low_height_takeoff: bool = False) -> int:
+               takeoff: bool = False, low_height_takeoff: bool = False) -> int:
         if self.previous is None:
             self.previous = (altitude_m, timestamp_s)
             return self.throttle
@@ -50,8 +51,9 @@ class AltitudeControl:
         self.speed += SPEED_FILTER_ALPHA * (measured_speed - self.speed)
         self.speed_ready = True
         descent_limit = LANDING_DESCENT_SPEED_M_S if landing else MAX_VERTICAL_SPEED_M_S
+        climb_limit = TAKEOFF_MAX_CLIMB_SPEED_M_S if takeoff else MAX_VERTICAL_SPEED_M_S
         target_speed = _clamp(ALTITUDE_KP * (target_m - altitude_m), -descent_limit,
-                              MAX_VERTICAL_SPEED_M_S)
+                              climb_limit)
         if low_height_takeoff and target_m - altitude_m > 0.03:
             target_speed = max(target_speed, LOW_HEIGHT_MIN_CLIMB_SPEED_M_S)
         error = target_speed - self.speed
