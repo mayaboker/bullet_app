@@ -13,6 +13,7 @@ App runs a 50 Hz loop for hover/land or red-truck target-hit. Bullet View sends 
 - Manual View approval or one automatic attempt, with telemetry and View loss handling.
 - Colored terminal logs for every mission phase change and persistent target tracking checkpoints.
 - Optional background MsgPack/ZMQ publication of blackboard values for MCAP recording.
+- GPS_RAW_INT and GLOBAL_POSITION_INT rate requests when their recording topics are enabled.
 
 ## Architecture
 
@@ -78,13 +79,15 @@ Start the target scene and Bullet Visual, then run:
 uv run --locked bullet-app --config src/bullet_app/app.sitl.yaml --mode manual --mission target-hit
 ```
 
-The App VS Code mission tasks use this SITL config. The workspace target-hit stack selects it through its launch script. View sends Arm and Start. The drone climbs to the applied height (10 m by default), hovers five seconds, searches, centers, and follows LOS guidance. Tracker boxes are forwarded to View for frame-matched overlays. Validated simulator contact disarms and reports `hit`. Without enabled contact, Commit times out after three seconds and lands with `contact not confirmed`. Target-hit permits one attempt per App process. See the [target-hit guide](docs/target-hit-mission.md).
+The App VS Code mission tasks use this SITL config. The workspace target-hit stack selects it through its launch script. View sends Arm and Start. The drone climbs to the applied height (20 m by default), hovers five seconds, searches, centers, and follows LOS guidance. At LOS entry, App captures the current altitude-hold throttle and uses it as the nominal-hover baseline for LOS thrust demands. Tracker boxes are forwarded to View for frame-matched overlays. Validated simulator contact disarms and reports `hit`. Without enabled contact, Commit times out after three seconds and lands with `contact not confirmed`. Target-hit permits one attempt per App process. See the [target-hit guide](docs/target-hit-mission.md).
 
 ## Configuration
 
 The bundled [app.yaml](src/bullet_app/app.yaml) selects independent MSP and MAVLink connections and disables simulator contact. The [SITL config](src/bullet_app/app.sitl.yaml) enables it. Copy either file and pass `--config path/to/app.yaml` for another setup; every field is documented beside its value. Select `tcp` or `serial` independently for MSP and MAVLink. Serial MSP uses `device` and `baudrate`; serial MAVLink uses a device `endpoint` and `baudrate`.
 
 `telemetry_publisher` in the same YAML binds `tcp://127.0.0.1:5558` for MCAP recording. All bundled topic rates are `0`, so the worker stays off. Set individual rates from `0` to `50` FPS; positive rates repeat the latest available value. For example, set `telemetry/attitude: 25` and `visual/bbox: 10`, then start `mcap_bagger` with matching channel topics and endpoint before App. The [publisher protocol guide](docs/telemetry-publishing.md) lists every topic, timestamp rule, and the three-frame ZMQ envelope.
+
+Setting `telemetry/gps_raw_int` or `telemetry/global_position_int` above zero also requests that MAVLink message from Betaflight at the configured rate. The workspace mission stacks set both to 2 Hz and start SITL with virtual GPS. A hardware connection needs a configured GPS source; otherwise no GPS samples are published.
 
 | Setting | Default | Use |
 | --- | --- | --- |

@@ -23,6 +23,10 @@ AUX_HIGH = 2000
 THROTTLE_MIN = 1000
 CONTROL_PERIOD_S = 0.02
 TELEMETRY_RATE_HZ = 50.0
+GPS_TOPICS = (
+    ('telemetry/gps_raw_int', mavutil.mavlink.MAVLINK_MSG_ID_GPS_RAW_INT),
+    ('telemetry/global_position_int', mavutil.mavlink.MAVLINK_MSG_ID_GLOBAL_POSITION_INT),
+)
 HEARTBEAT_STALE_S = 3.0
 ALTITUDE_STALE_S = 1.0
 ALTITUDE_STARTUP_TIMEOUT_S = 10.0
@@ -82,6 +86,16 @@ def _open_mavlink(config: AppConfig) -> MavlinkTelemetry:
     if config.mavlink.type is ConnectionType.TCP:
         return MavlinkTelemetry(config.mavlink.endpoint)
     return MavlinkTelemetry(config.mavlink.endpoint, baud=config.mavlink.baudrate)
+
+
+def _request_telemetry_rates(telemetry: MavlinkTelemetry, config: AppConfig) -> None:
+    """Request mission feedback and any configured GPS recording streams."""
+    telemetry.set_message_rate(mavutil.mavlink.MAVLINK_MSG_ID_VFR_HUD, TELEMETRY_RATE_HZ)
+    telemetry.set_message_rate(mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, TELEMETRY_RATE_HZ)
+    rates = dict(config.telemetry_publisher.topics)
+    for topic, message_id in GPS_TOPICS:
+        if rate := rates.get(topic, 0):
+            telemetry.set_message_rate(message_id, rate)
 
 
 def _open_tracker(options, resources: ExitStack):
@@ -148,8 +162,7 @@ def run_mission(options) -> int:
 
     with ExitStack() as resources:
         telemetry = resources.enter_context(_open_mavlink(config))
-        telemetry.set_message_rate(mavutil.mavlink.MAVLINK_MSG_ID_VFR_HUD, TELEMETRY_RATE_HZ)
-        telemetry.set_message_rate(mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, TELEMETRY_RATE_HZ)
+        _request_telemetry_rates(telemetry, config)
         if options.mission == 'target-hit' or needs_timesync(config.telemetry_publisher):
             telemetry.enable_timesync()
 

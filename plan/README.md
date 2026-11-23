@@ -66,3 +66,6 @@
 | [0062 Colored mission state logs](0062-colored-mission-state-logs.md) | Log each accepted mission phase change with terminal color. | Implemented; 79 tests passed | Pending (no commit requested) |
 | [0063 Blackboard MCAP publisher](0063-blackboard-mcap-publisher.md) | Publish configured blackboard values through an isolated MsgPack/ZMQ worker. | Implemented; 96 App and 78 bagger tests passed | Pending (no commit requested) |
 | [0064 Telemetry publisher port](0064-telemetry-publisher-port.md) | Move the App publisher off renderer control port 5557 and align recorder subscriptions. | Implemented; 26 App and 18 Bagger tests passed | Pending (no commit requested) |
+| [0065 GPS MAVLink streams for MCAP](0065-gps-mavlink-mcap-streams.md) | Request enabled GPS messages and publish both workspace GPS topics at 2 Hz. | Implemented; 21 App tests and config checks passed | Pending (no commit requested) |
+| [0066 Preserve throttle at LOS handoff](0066-los-throttle-handoff.md) | Carry the active altitude-hold PWM into LOS thrust mapping. | Implemented; 101 App tests passed | Pending (no commit requested) |
+| [0067 Target-hit 20 m default](0067-target-takeoff-height-20m.md) | Set target-hit's initial takeoff target to 20 m above launch. | Implemented; 101 App tests passed | Pending (no commit requested) |

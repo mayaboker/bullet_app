@@ -2,12 +2,13 @@ from types import SimpleNamespace
 
 import pytest
 from beta_client.timesync import TimeSyncStatus
-from los_tracking.types import State
+from los_tracking.types import ControlDemand, State
 
 from bullet_app.blackboard import StepContext
 from bullet_app.cli import DEFAULT_TARGET_PROFILE
 from bullet_app.flight import Action, Phase
 from bullet_app.target import TargetMission, _quaternion
+from bullet_app.missions.target_hit import _demand_command
 from conftest import tick
 
 
@@ -29,6 +30,7 @@ def _sync(mission, now, offset_ns=0):
 
 def test_target_starts_without_preflight_feed_and_allows_one_attempt():
     mission = TargetMission(DEFAULT_TARGET_PROFILE)
+    assert mission.height_m == 20.0
     tick(mission, 1., 0., 1., False, True)
     tick(mission, 13., 0., 13., False, True)
     _sync(mission, 13.)
@@ -48,8 +50,8 @@ def test_target_enters_search_after_hover_without_bbox():
     mission.started = True
     for index in range(1, 130):
         now = 100. + index * .1
-        mission.blackboard.telemetry = _sample(now, altitude=10.)
-        tick(mission, now, 10., now, True, False)
+        mission.blackboard.telemetry = _sample(now, altitude=mission.height_m)
+        tick(mission, now, mission.height_m, now, True, False)
         if mission.phase == Phase.SEARCH:
             break
     assert mission.phase == Phase.SEARCH
@@ -100,6 +102,37 @@ def test_commit_without_simulation_contact_lands_after_timeout():
 def test_mavlink_quaternion_is_converted_to_bullet_axes():
     q = _quaternion(0., 0., 0.5)
     assert q[2] < 0
+
+
+def test_los_thrust_mapping_uses_captured_hover_pwm():
+    mission = TargetMission(DEFAULT_TARGET_PROFILE)
+    hover_thrust = mission.config.vehicle.mass_kg * mission.config.vehicle.gravity_m_s2
+    demand = lambda thrust: ControlDemand(0., 0., 0., thrust)
+    assert _demand_command(demand(hover_thrust), mission.config, hover_pwm=1540).throttle == 1540
+    assert _demand_command(demand(hover_thrust + 2.), mission.config, hover_pwm=1540).throttle > 1540
+    assert _demand_command(demand(hover_thrust - 2.), mission.config, hover_pwm=1540).throttle < 1540
+    assert _demand_command(demand(0.), mission.config, hover_pwm=1050).throttle == 1050
+    assert _demand_command(demand(mission.config.vehicle.max_thrust_n),
+                           mission.config, hover_pwm=1900).throttle == 2000
+
+
+def test_settle_to_los_retains_active_throttle_baseline():
+    mission = TargetMission(DEFAULT_TARGET_PROFILE)
+    mission.phase = Phase.SETTLE
+    mission.controller.throttle = 1540
+    mission.ground_altitude_m = 0.
+    mission._enter(Phase.LOS, 100.)
+    assert mission.los_hover_pwm == 1540
+    mission.controller.throttle = 1600
+    mission.blackboard.telemetry = _sample(100.02)
+    mission._sensor_inputs = lambda _: None
+    mission.navigator.update = lambda *_args, **_kwargs: SimpleNamespace(
+        state=State.TRACK, command=ControlDemand(0., 0., 0.,
+            mission.config.vehicle.mass_kg * mission.config.vehicle.gravity_m_s2),
+        valid_until_s=100.04)
+    command = tick(mission, 100.02, 10., 100.02, True, True)
+    assert command.throttle == 1540
+    assert mission.los_hover_pwm == 1540
 
 
 def test_los_uses_mavlink_samples_and_bbox_to_command_forward_pitch():

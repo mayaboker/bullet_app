@@ -4,7 +4,7 @@ from struct import unpack
 import socket
 import time
 
-from beta_client.entities import Attitude, TelemetrySnapshot
+from beta_client.entities import Attitude, GlobalPositionInt, GpsRawInt, TelemetrySnapshot
 from beta_client.timesync import TimeSyncStatus
 from los_tracking.types import Diagnostics, NavigationResult, State, TrackStage
 import msgpack
@@ -60,6 +60,23 @@ def test_blackboard_topics_include_metadata_and_false_values():
     assert value == board.telemetry.attitude and (received, rate) == (9.9, 49.0)
     assert _read_topic(board, 'simulation/target_contact')[0] is False
     assert _read_topic(board, 'features/navigation_result')[0] is None
+
+
+def test_gps_topics_read_decoded_mavlink_values_and_source_metadata():
+    board = Blackboard()
+    board.reset()
+    gps = GpsRawInt(1_700_000_000_123_456, 3, 320_000_000, 350_000_000,
+                    100_000, 0, 0, 0, 0, 12)
+    position = GlobalPositionInt(4000, 320_000_000, 350_000_000, 100_000,
+                                 2_000, 0, 0, 0, 0)
+    board.telemetry = TelemetrySnapshot(
+        gps_raw_int=gps, gps_raw_int_at=9.8, gps_raw_int_hz=2.0,
+        global_position_int=position, global_position_int_at=9.9,
+        global_position_int_hz=2.0)
+
+    assert _read_topic(board, 'telemetry/gps_raw_int')[:3] == (gps, 9.8, 2.0)
+    assert _read_topic(board, 'telemetry/global_position_int')[:3] == (position, 9.9, 2.0)
+    assert _plain(position)['lat'] == 320_000_000
 
 
 def test_background_publisher_repeats_latest_and_keeps_source_header():

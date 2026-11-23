@@ -13,7 +13,7 @@ from ..sensor_estimator import TargetSensorEstimator
 from ..tracking_log import TrackingLog
 from .base import Action, Command, MAX_HEIGHT_M, MIN_HEIGHT_M, MissionBase, Mode, Phase, Readiness
 
-TARGET_HEIGHT_M = 10.0
+TARGET_HEIGHT_M = 20.0
 TARGET_HOVER_S = 5.0
 SEARCH_RATE_RAD_S = radians(15)
 SEARCH_TIMEOUT_S = 60.0
@@ -67,7 +67,7 @@ def _yaw_pwm(rate_rad_s):
     return round(RC_CENTER + RC_HALF_RANGE * stick * (1 if rate_rad_s >= 0 else -1))
 
 
-def _demand_command(demand, config):
+def _demand_command(demand, config, *, hover_pwm):
     roll = round(RC_CENTER + RC_HALF_RANGE * demand.roll_rad / ANGLE_SCALE_RAD)
     pitch = round(RC_CENTER + RC_HALF_RANGE * demand.pitch_rad / ANGLE_SCALE_RAD)
     def betaflight_throttle(thrust_n):
@@ -75,7 +75,7 @@ def _demand_command(demand, config):
         stick = min(1.0, max(0.0, (fraction - IDLE_FRACTION) / (1 - IDLE_FRACTION)))
         return round(THROTTLE_MIN + (THROTTLE_MAX - THROTTLE_MIN) * stick)
     nominal_hover = betaflight_throttle(config.vehicle.mass_kg * config.vehicle.gravity_m_s2)
-    throttle = betaflight_throttle(demand.thrust_n) + HOVER_THROTTLE - nominal_hover
+    throttle = betaflight_throttle(demand.thrust_n) + hover_pwm - nominal_hover
     return Command(max(THROTTLE_MIN, min(THROTTLE_MAX, throttle)), True,
                    max(1000, min(2000, roll)), max(1000, min(2000, pitch)),
                    max(1000, min(2000, _yaw_pwm(demand.yaw_rate_rad_s))))
@@ -100,6 +100,7 @@ class TargetMission(MissionBase):
         self.swept = 0.0
         self.settled_at = None
         self.los_started = None
+        self.los_hover_pwm = HOVER_THROTTLE
         self.commit_started = None
         self.timesync_status: TimeSyncStatus | None = None
         self.timesync_started_at = None
@@ -116,6 +117,7 @@ class TargetMission(MissionBase):
             self.last_yaw = None
         elif self.phase == Phase.LOS:
             self.los_started = event.kwargs['now']
+            self.los_hover_pwm = self.controller.throttle
             self.sensor_estimator.start_los()
 
     def request_height(self, height_m: float) -> None:
@@ -323,7 +325,7 @@ class TargetMission(MissionBase):
                 return super().step(context)
         if result.command is None or now >= result.valid_until_s:
             return Command(self.controller.throttle, True)
-        return _demand_command(result.command, self.config)
+        return _demand_command(result.command, self.config, hover_pwm=self.los_hover_pwm)
 
     def step(self, context: StepContext) -> Command:
         if context.blackboard is not self.blackboard:

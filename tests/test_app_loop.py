@@ -9,6 +9,36 @@ from bullet_app.blackboard import Blackboard, StepContext
 from bullet_app.config import DEFAULT_CONFIG
 from bullet_app.missions import Command, Mode, Phase
 from bullet_app.runtime_diagnostics import RuntimeDiagnostics
+from pymavlink import mavutil
+
+
+def test_gps_rate_requests_follow_enabled_publisher_topics():
+    requests = []
+    telemetry = SimpleNamespace(set_message_rate=lambda message_id, rate: requests.append((message_id, rate)))
+    config = SimpleNamespace(telemetry_publisher=SimpleNamespace(topics=(
+        ('telemetry/gps_raw_int', 2.0), ('telemetry/global_position_int', 0.0))))
+
+    app._request_telemetry_rates(telemetry, config)
+
+    assert requests == [
+        (mavutil.mavlink.MAVLINK_MSG_ID_VFR_HUD, app.TELEMETRY_RATE_HZ),
+        (mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, app.TELEMETRY_RATE_HZ),
+        (mavutil.mavlink.MAVLINK_MSG_ID_GPS_RAW_INT, 2.0),
+    ]
+
+
+def test_both_gps_streams_requested_when_enabled():
+    requests = []
+    telemetry = SimpleNamespace(set_message_rate=lambda message_id, rate: requests.append((message_id, rate)))
+    config = SimpleNamespace(telemetry_publisher=SimpleNamespace(topics=(
+        ('telemetry/gps_raw_int', 2.0), ('telemetry/global_position_int', 2.0))))
+
+    app._request_telemetry_rates(telemetry, config)
+
+    assert requests[-2:] == [
+        (mavutil.mavlink.MAVLINK_MSG_ID_GPS_RAW_INT, 2.0),
+        (mavutil.mavlink.MAVLINK_MSG_ID_GLOBAL_POSITION_INT, 2.0),
+    ]
 
 
 def test_simulation_contact_is_polled_independently_of_tracker():

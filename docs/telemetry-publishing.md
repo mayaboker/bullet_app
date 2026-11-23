@@ -4,6 +4,8 @@ Bullet App can publish selected current blackboard values to `mcap_bagger` witho
 
 Copy [App's commented YAML](../src/bullet_app/app.yaml), set `telemetry_publisher.topics` rates, and pass the copy with `--config`. The endpoint must be loopback TCP and must match the ordinary channels in [bagger's example config](../../mcap_bagger/config/recorder.yaml). Start the bagger before App to reduce PUB/SUB startup loss. Publication is best effort; a subscriber can miss startup or overloaded messages.
 
+For the GPS topics, a positive configured rate also requests `GPS_RAW_INT` or `GLOBAL_POSITION_INT` over MAVLink at that rate during App startup. If the firmware has no configured GPS source, the blackboard values remain absent and the worker skips those topics. The workspace launch profiles configure both at 2 Hz and enable virtual GPS in SITL.
+
 | Topic | Blackboard value | Additional payload fields |
 | --- | --- | --- |
 | `telemetry/heartbeat` | `telemetry.heartbeat` | `received_at_s` |
