@@ -63,12 +63,14 @@ class AppConfig:
     mavlink: MavlinkConnection
     simulation: SimulationConfig = SimulationConfig()
     telemetry_publisher: TelemetryPublisherConfig = TelemetryPublisherConfig()
+    view_restart_enabled: bool = False
 
     @classmethod
     def from_yaml(cls, path: Path) -> 'AppConfig':
         """Read selected connection settings before any device is opened."""
         data = yaml.safe_load(path.read_text())
-        root = _mapping(data, 'config', {'betaflight', 'simulation', 'telemetry_publisher'}, {'betaflight'})
+        root = _mapping(data, 'config', {'betaflight', 'simulation', 'telemetry_publisher',
+                                         'view_restart_enabled'}, {'betaflight'})
         betaflight = _mapping(root['betaflight'], 'betaflight', {'msp', 'mavlink'}, {'msp', 'mavlink'})
         msp_data = _mapping(betaflight['msp'], 'betaflight.msp',
                             {'type', 'host', 'port', 'device', 'baudrate'}, {'type'})
@@ -89,7 +91,10 @@ class AppConfig:
         simulation = SimulationConfig(**simulation_data) if simulation_data is not None else SimulationConfig()
         _validate_simulation(simulation)
         publisher = _publisher_config(root['telemetry_publisher']) if 'telemetry_publisher' in root else TelemetryPublisherConfig()
-        return cls(msp, mavlink, simulation, publisher)
+        restart_enabled = root.get('view_restart_enabled', False)
+        if type(restart_enabled) is not bool:
+            raise ValueError('view_restart_enabled must be true or false')
+        return cls(msp, mavlink, simulation, publisher, restart_enabled)
 
     def with_overrides(self, *, msp_host: str | None = None, msp_port: int | None = None,
                        mavlink_endpoint: str | None = None,
@@ -109,7 +114,8 @@ class AppConfig:
         simulation = (replace(self.simulation, contact_endpoint=contact_endpoint)
                       if contact_endpoint is not None else self.simulation)
         _validate_simulation(simulation)
-        return AppConfig(msp, mavlink, simulation, self.telemetry_publisher)
+        return AppConfig(msp, mavlink, simulation, self.telemetry_publisher,
+                         self.view_restart_enabled)
 
 
 def _publisher_config(value) -> TelemetryPublisherConfig:

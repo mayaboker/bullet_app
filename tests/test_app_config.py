@@ -33,6 +33,16 @@ def test_packaged_config_keeps_existing_tcp_connections():
     assert not config.telemetry_publisher.enabled
     assert not config.telemetry_publisher.record_msp_rc
     assert config.telemetry_publisher.endpoint == 'tcp://127.0.0.1:5558'
+    assert not config.view_restart_enabled
+
+
+def test_view_restart_config_is_explicit_bool(tmp_path):
+    path = tmp_path / 'app.yaml'
+    path.write_text(SERIAL_CONFIG + 'view_restart_enabled: true\n')
+    assert AppConfig.from_yaml(path).view_restart_enabled
+    path.write_text(SERIAL_CONFIG + 'view_restart_enabled: 1\n')
+    with pytest.raises(ValueError, match='view_restart_enabled'):
+        AppConfig.from_yaml(path)
 
 
 def test_publisher_config_is_opt_in_and_rates_are_independent(tmp_path):

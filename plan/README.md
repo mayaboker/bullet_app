@@ -74,3 +74,4 @@
 | [0070 Faster takeoff and LOS entry descent](0070-faster-takeoff-los-entry-descent.md) | Raise takeoff climb ceiling and start first LOS track with a bounded descent. | Implemented; 113 App and 4 focused LOS tests passed, SITL hit | Pending (no commit requested) |
 | [0071 Smooth LOS descent](0071-smooth-los-descent.md) | Keep descending while the tracked target remains below the elevation reference. | Implemented; 113 App and 20 focused LOS tests passed, SITL hit | Pending (no commit requested) |
 | [0072 Target-hit 30 m descent](0072-target-hit-30m-descent.md) | Start target-hit at 30 m and request faster early LOS descent. | Implemented; 113 App and 20 focused LOS tests passed, final SITL hit | Pending (no commit requested) |
+| [0073 View requested flight-session restart](0073-view-restart.md) | Recreate a manual SITL flight session while keeping the View MAVLink link alive. | Implemented; 116 App tests passed | Pending (no commit requested) |

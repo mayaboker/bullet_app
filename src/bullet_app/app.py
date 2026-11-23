@@ -1,5 +1,6 @@
 """Own the external SITL connections and pace View-gated flight control."""
 from contextlib import ExitStack
+from concurrent.futures import ThreadPoolExecutor
 import time
 
 from beta_client.entities import RcChannels
@@ -31,6 +32,7 @@ HEARTBEAT_STALE_S = 3.0
 ALTITUDE_STALE_S = 1.0
 ALTITUDE_STARTUP_TIMEOUT_S = 10.0
 DISARM_SEND_COUNT = 3
+RECONNECT_READY_TIMEOUT_S = 10.0
 
 
 def _send_command(transport: TcpTransport | SerialTransport, command: Command):
@@ -116,7 +118,8 @@ def _open_simulation(options, config: AppConfig, resources: ExitStack):
     return resources.enter_context(SimulationContactSubscriber(config.simulation.contact_endpoint))
 
 
-def _collect_inputs(mission, context: StepContext, tracker, simulation, view) -> None:
+def _collect_inputs(mission, context: StepContext, tracker, simulation, view,
+                    restart_handler=None) -> None:
     """Apply target observations and View commands before the mission step."""
     now = context.now_s
     blackboard = context.blackboard
@@ -127,7 +130,10 @@ def _collect_inputs(mission, context: StepContext, tracker, simulation, view) ->
                 view.publish_bbox(blackboard.visual.bbox)
     if simulation is not None:
         mission.observe_simulation_contact(simulation.poll())
-    view.poll(mission, context)
+    if restart_handler is None:
+        view.poll(mission, context)
+    else:
+        view.poll(mission, context, restart_handler)
     blackboard.view_alive = view.view_alive(now)
 
 
@@ -160,6 +166,8 @@ def run_mission(options) -> int:
         msp_host=options.msp_host, msp_port=options.msp_port,
         mavlink_endpoint=options.mavlink_endpoint,
         contact_endpoint=options.contact_endpoint)
+    if getattr(options, 'mode', 'auto') == 'manual':
+        return _run_manual(options, config)
     blackboard = _init_blackboard()
     mission = create_mission(options, blackboard)
 
@@ -220,3 +228,198 @@ def _init_blackboard():
     blackboard = Blackboard()
     blackboard.reset()
     return blackboard
+
+
+def _connect_flight(config: AppConfig):
+    """Open blocking Betaflight connections away from the View command loop."""
+    resources = ExitStack()
+    try:
+        telemetry = resources.enter_context(_open_mavlink(config))
+        _request_telemetry_rates(telemetry, config)
+        if needs_timesync(config.telemetry_publisher):
+            telemetry.enable_timesync()
+        transport = resources.enter_context(_open_msp(config))
+        sitl_confirmed = _confirm_sitl(transport)
+        if config.view_restart_enabled and not sitl_confirmed:
+            raise ValueError('Restart-enabled connection did not identify as SITL')
+        return resources, telemetry, transport, sitl_confirmed
+    except BaseException:
+        resources.close()
+        raise
+
+
+def _manual_config(options):
+    return AppConfig.from_yaml(options.config).with_overrides(
+        msp_host=options.msp_host, msp_port=options.msp_port,
+        mavlink_endpoint=options.mavlink_endpoint,
+        contact_endpoint=options.contact_endpoint)
+
+
+def _run_manual(options, initial_config: AppConfig) -> int:
+    """Keep View connected while individual disarmed SITL sessions come and go."""
+    blackboard = _init_blackboard()
+    session = None
+    pending_restart = False
+    config = initial_config
+    connect_started = time.monotonic()
+    with ViewLink() as view, ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_connect_flight, config)
+        view.app_state = 'restarting' if config.view_restart_enabled else 'disabled'
+        view.app_epoch = 0
+        next_tick = time.monotonic()
+
+        def request_restart():
+            nonlocal config, future, pending_restart, connect_started, session
+            if not initial_config.view_restart_enabled or options.mode != 'manual':
+                raise ValueError('Restart disabled')
+            if (initial_config.msp.type is not ConnectionType.TCP or
+                    initial_config.mavlink.type is not ConnectionType.TCP):
+                raise ValueError('Restart requires SITL TCP connections')
+            if session is not None and not _confirmed_disarmed(blackboard):
+                raise ValueError('Fresh disarmed telemetry required')
+            if future is not None or view.app_state == 'restarting':
+                raise ValueError('Restart already in progress')
+            try:
+                reloaded = _manual_config(options)
+            except Exception as error:
+                raise ValueError(f'Restart config invalid: {error}') from error
+            if (not reloaded.view_restart_enabled or
+                    reloaded.msp.type is not ConnectionType.TCP or
+                    reloaded.mavlink.type is not ConnectionType.TCP):
+                raise ValueError('Restart requires enabled SITL TCP config')
+            config = reloaded
+            if session is not None:
+                _close_manual_session(session)
+                session = None
+            blackboard.reset()
+            view.datum_m = None
+            view.last_phase = view.last_result = None
+            view.sitl_confirmed = False
+            view.app_state = 'restarting'
+            connect_started = time.monotonic()
+            future = executor.submit(_connect_flight, config)
+            pending_restart = True
+
+        def session_lost(reason):
+            nonlocal session, pending_restart
+            logger.warning('Flight connection lost: {}', reason)
+            if session is not None:
+                _close_manual_session(session)
+                session = None
+            view.app_state = ('restart_failed' if pending_restart else
+                              'restart_required' if config.view_restart_enabled else 'disabled')
+            view.sitl_confirmed = False
+            blackboard.reset()
+            if pending_restart:
+                view.finish_restart(False, str(reason))
+                pending_restart = False
+
+        try:
+            while True:
+                now = time.monotonic()
+                if future is not None and future.done():
+                    opened_resources = None
+                    try:
+                        resources, telemetry, transport, sitl_confirmed = future.result()
+                        opened_resources = resources
+                        blackboard.reset()
+                        mission = create_mission(options, blackboard)
+                        if options.mission == 'target-hit':
+                            telemetry.enable_timesync()
+                        tracker = _open_tracker(options, resources)
+                        simulation = _open_simulation(options, config, resources)
+                        publisher = (resources.enter_context(TelemetryPublisher(config.telemetry_publisher, blackboard))
+                                     if config.telemetry_publisher.enabled else None)
+                        session = (resources, telemetry, transport, mission, tracker, simulation,
+                                   publisher, RuntimeDiagnostics(now), now)
+                        view.sitl_confirmed = sitl_confirmed
+                    except Exception as error:
+                        if opened_resources is not None:
+                            opened_resources.close()
+                        logger.error('Flight session open failed: {}', error)
+                        view.app_state = 'restart_failed' if config.view_restart_enabled else 'disabled'
+                        if pending_restart:
+                            view.finish_restart(False, str(error))
+                            pending_restart = False
+                    finally:
+                        future = None
+                if session is not None:
+                    resources, telemetry, transport, mission, tracker, simulation, publisher, diagnostics, connected_at = session
+                    try:
+                        blackboard.telemetry = telemetry.snapshot()
+                    except (RuntimeError, OSError, ConnectionError, TimeoutError) as error:
+                        session_lost(error)
+                if session is not None:
+                    resources, telemetry, transport, mission, tracker, simulation, publisher, diagnostics, connected_at = session
+                    context = StepContext(blackboard, now)
+                    heartbeat = blackboard.telemetry.heartbeat
+                    heartbeat_fresh = (heartbeat is not None and
+                                       now - blackboard.telemetry.heartbeat_at <= HEARTBEAT_STALE_S)
+                    if heartbeat_fresh and context.firmware_armed and view.app_state == 'restarting':
+                        view.app_state = 'restart_failed'
+                        if pending_restart:
+                            view.finish_restart(False, 'Vehicle is armed after reconnect')
+                            pending_restart = False
+                        _close_manual_session(session)
+                        session = None
+                        blackboard.reset()
+                    elif heartbeat_fresh and not context.firmware_armed and view.app_state == 'restarting':
+                        view.app_state = 'ready' if config.view_restart_enabled else 'disabled'
+                        view.app_epoch = (view.app_epoch + 1) % (1 << 24)
+                        if pending_restart:
+                            view.finish_restart(True)
+                            pending_restart = False
+                    elif view.app_state == 'restarting' and now - connect_started > RECONNECT_READY_TIMEOUT_S:
+                        view.app_state = 'restart_failed'
+                        if pending_restart:
+                            view.finish_restart(False, 'Disarmed telemetry not ready')
+                            pending_restart = False
+                    if session is not None and not heartbeat_fresh and now - connected_at > HEARTBEAT_STALE_S:
+                        session_lost('Flight telemetry stale')
+                    elif session is not None:
+                        try:
+                            _collect_inputs(mission, context, tracker, simulation, view, request_restart)
+                            if session is not None:
+                                command = _step_with_safety(mission, context, connected_at)
+                                sent = _send_command(transport, command)
+                                if publisher is not None and sent is not None:
+                                    publisher.enqueue_rc(sent[0], mission.phase.value, sent[1])
+                                mission.on_command_sent(context, command)
+                                view.publish(mission, context)
+                                diagnostics.observe_events(mission, context, view, target_enabled=tracker is not None)
+                                diagnostics.observe_periodic(mission, context, command, view)
+                        except (RuntimeError, OSError, ConnectionError, TimeoutError) as error:
+                            session_lost(error)
+                if session is None:
+                    context = StepContext(blackboard, now)
+                    view.poll(None, context, request_restart)
+                    blackboard.view_alive = view.view_alive(now)
+                view.publish_app_status(now, session_ready=session is not None)
+                next_tick += CONTROL_PERIOD_S
+                remaining = next_tick - time.monotonic()
+                if remaining > 0:
+                    time.sleep(remaining)
+                else:
+                    next_tick = time.monotonic()
+        finally:
+            if session is not None:
+                _close_manual_session(session)
+
+
+def _confirmed_disarmed(blackboard) -> bool:
+    sample = blackboard.telemetry
+    return (sample.heartbeat is not None and
+            time.monotonic() - sample.heartbeat_at <= HEARTBEAT_STALE_S and
+            not StepContext(blackboard, time.monotonic()).firmware_armed)
+
+
+def _close_manual_session(session) -> None:
+    resources, _, transport, mission, _, _, publisher, *_ = session
+    for _ in range(DISARM_SEND_COUNT):
+        try:
+            sent = _send_command(transport, Command(THROTTLE_MIN, False))
+            if publisher is not None and sent is not None:
+                publisher.enqueue_rc(sent[0], mission.phase.value, sent[1])
+        except (OSError, ConnectionError, TimeoutError):
+            break
+    resources.close()

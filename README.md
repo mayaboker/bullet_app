@@ -94,6 +94,7 @@ Setting `telemetry/gps_raw_int` or `telemetry/global_position_int` above zero al
 | Setting | Default | Use |
 | --- | --- | --- |
 | `simulation.enabled` | `false` | Open simulator contact only for target-hit when true. |
+| `view_restart_enabled` | `false` | Permit View command 31013 to recreate a disarmed manual SITL session over TCP. The workspace SITL configs enable it. |
 | `simulation.contact_endpoint` | `tcp://127.0.0.1:5555` in bundled YAML | ZeroMQ contact publisher when enabled. |
 | `--contact-endpoint` | None | Override the contact endpoint; requires simulation enabled. |
 | `--bbox-endpoint` | `tcp://127.0.0.1:5560` | Tracker boxes for target-hit. |
@@ -129,7 +130,7 @@ uv run --locked pytest -q
 
 ## Troubleshooting
 
-If View disconnects for three seconds in manual mode, App disarms while idle or lands while airborne. Stale Betaflight telemetry faults and disarms; restart App before another attempt. If a contact override is rejected, enable `simulation.enabled` in the selected YAML. If target-hit reaches Commit without contact, it lands after three seconds.
+If View disconnects for three seconds in manual mode, App disarms while idle or lands while airborne. On SITL connection loss, App keeps its View MAVLink link open and reports `restart_required`. After resetting the simulation, use **Restart Bullet App** in View to reload YAML and mission profile, clear runtime observations, and open a fresh flight session. This is available only for manual TCP SITL configs with `view_restart_enabled: true`; an exited App process must be launched again. If a contact override is rejected, enable `simulation.enabled` in the selected YAML. If target-hit reaches Commit without contact, it lands after three seconds.
 
 ## Roadmap
 

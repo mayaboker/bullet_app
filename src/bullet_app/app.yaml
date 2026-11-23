@@ -22,6 +22,8 @@ betaflight:
     # Serial MAVLink baud rate in bits/s; ignored for a TCP endpoint.
     baudrate: 57600
 # Simulator target contact is optional; hardware runs leave this disabled.
+# View-requested manual SITL restart; false by default and on hardware.
+view_restart_enabled: false
 simulation:
   # Set true only when a simulator publishes target contact events; default if omitted: false.
   enabled: false
