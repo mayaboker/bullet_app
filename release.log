@@ -1,13 +1,26 @@
 # Release Log — alice branch (changes from 0.1-alpha)
 
-## bullet_app
+## 0.2-alice (changes from 0.1-alice)
+
+- Merged bob branch (20 commits): mission control refactor with blackboard
+  pattern, StepContext, telemetry publisher, YAML config system, Action/Mode
+  enums, tracking log, colored terminal logs, GPS MAVLink streams, target
+  height raised to 20m, msgpack dependency.
+
+- `src/bullet_app/missions/target_hit.py`
+  Re-applied attitude_at fix on top of bob's blackboard-based code. Uses
+  sample.attitude_at instead of TIMESYNC offset mapping, which produced
+  negative ages (-106ms) with Isaac Sim causing 100% attitude rejection.
+  Bob's mapped_age tracking and rejection counter retained for diagnostics.
+
+### Known limitation
+
+- target_contact() is stubbed to False in Isaac physics — truck hit detection
+  is not yet implemented for the Isaac backend.
+
+## 0.1-alice (changes from 0.1-alpha)
 
 1 commit, 1 file changed, +2 / -2 lines.
 
-### Modified files
-
 - `src/bullet_app/missions/target_hit.py`
-  Attitude timestamp now uses `sample.attitude_at` instead of manually computing
-  the offset from `timesync_status.offset_ns + time_boot_ms`. Removes the
-  redundant `0 <=` lower bound check on attitude age, keeping only the max age
-  guard.
+  Original attitude_at fix (superseded by bob merge + re-applied fix above).
