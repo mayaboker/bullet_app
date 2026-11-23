@@ -1,0 +1,13 @@
+# Release Log — alice branch (changes from 0.1-alpha)
+
+## bullet_app
+
+1 commit, 1 file changed, +2 / -2 lines.
+
+### Modified files
+
+- `src/bullet_app/missions/target_hit.py`
+  Attitude timestamp now uses `sample.attitude_at` instead of manually computing
+  the offset from `timesync_status.offset_ns + time_boot_ms`. Removes the
+  redundant `0 <=` lower bound check on attitude age, keeping only the max age
+  guard.
