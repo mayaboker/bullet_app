@@ -289,3 +289,27 @@ def test_attitude_mapping_uses_vehicle_boot_time_not_arrival():
     _sync(mission, 100.03, 95_000_000_000)
     mission._observe_telemetry(100.03)
     assert mission.sensor_estimator.attitude_latest.timestamp_s == 100.
+
+
+def test_future_mapped_attitude_uses_fresh_arrival_time():
+    mission = TargetMission(DEFAULT_TARGET_PROFILE)
+    sample = _sample(100.)
+    sample.attitude.time_boot_ms = 5000
+    sample.attitude_at = 100.03
+    mission.blackboard.telemetry = sample
+    _sync(mission, 100.03, 95_136_000_000)
+    mission._observe_telemetry(100.03)
+    assert mission.last_attitude_mapped_age_s == pytest.approx(-0.106)
+    assert mission.sensor_estimator.attitude_latest.timestamp_s == 100.03
+
+
+def test_far_future_mapped_attitude_is_rejected():
+    mission = TargetMission(DEFAULT_TARGET_PROFILE)
+    sample = _sample(100.)
+    sample.attitude.time_boot_ms = 5000
+    sample.attitude_at = 100.03
+    mission.blackboard.telemetry = sample
+    _sync(mission, 100.03, 95_500_000_000)
+    mission._observe_telemetry(100.03)
+    assert mission.sensor_estimator.attitude_latest is None
+    assert mission.attitude_mapping_rejections == 1

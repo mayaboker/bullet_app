@@ -1,0 +1,26 @@
+# Release Log — alice branch (changes from 0.1-alpha)
+
+## 0.2-alice (changes from 0.1-alice)
+
+- Merged bob branch (20 commits): mission control refactor with blackboard
+  pattern, StepContext, telemetry publisher, YAML config system, Action/Mode
+  enums, tracking log, colored terminal logs, GPS MAVLink streams, target
+  height raised to 20m, msgpack dependency.
+
+- `src/bullet_app/missions/target_hit.py`
+  Alice's Isaac SITL run exposed mapped attitude ages of about -106 ms.
+  The Bob merge retains TIMESYNC boot-time mapping when valid and uses the
+  fresh local receipt time only for a bounded future-dated mapping.
+  Larger clock errors remain rejected.
+
+### Known limitation
+
+- target_contact() is stubbed to False in Isaac physics — truck hit detection
+  is not yet implemented for the Isaac backend.
+
+## 0.1-alice (changes from 0.1-alpha)
+
+1 commit, 1 file changed, +2 / -2 lines.
+
+- `src/bullet_app/missions/target_hit.py`
+  Original attitude_at fix (superseded by bob merge + re-applied fix above).
