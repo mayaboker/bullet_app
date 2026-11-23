@@ -13,7 +13,7 @@ from ..sensor_estimator import TargetSensorEstimator
 from ..tracking_log import TrackingLog
 from .base import Action, Command, MAX_HEIGHT_M, MIN_HEIGHT_M, MissionBase, Mode, Phase, Readiness
 
-TARGET_HEIGHT_M = 20.0
+TARGET_HEIGHT_M = 30.0
 TARGET_HOVER_S = 5.0
 SEARCH_RATE_RAD_S = radians(15)
 SEARCH_TIMEOUT_S = 60.0

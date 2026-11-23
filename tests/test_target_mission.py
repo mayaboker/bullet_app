@@ -31,7 +31,7 @@ def _sync(mission, now, offset_ns=0):
 
 def test_target_starts_without_preflight_feed_and_allows_one_attempt():
     mission = TargetMission(DEFAULT_TARGET_PROFILE)
-    assert mission.height_m == 20.0
+    assert mission.height_m == 30.0
     tick(mission, 1., 0., 1., False, True)
     tick(mission, 13., 0., 13., False, True)
     _sync(mission, 13.)
