@@ -271,7 +271,7 @@ class MissionBase:
         now = context.now_s
         altitude_m = context.altitude_m
         altitude_at = context.altitude_at_s
-        if altitude_m is None or not isfinite(altitude_m) or altitude_at <= 0 or altitude_at > now or now - altitude_at > 1.0:
+        if altitude_m is None or not isfinite(altitude_m) or altitude_at <= 0 or altitude_at > now + 0.1 or now - altitude_at > 1.0:
             raise ValueError('Fresh finite MAVLink altitude required')
 
     def _handle_view_loss(self, context: StepContext) -> None:
