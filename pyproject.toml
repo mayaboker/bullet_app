@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bullet-app"
-version = "0.2.0"
+version = "0.25.0"
 description = "Standalone automatic SITL takeoff, hover and landing mission"
 readme = "README.md"
 requires-python = ">=3.12"

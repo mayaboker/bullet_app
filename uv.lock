@@ -4,7 +4,7 @@ requires-python = ">=3.12"
 
 [[package]]
 name = "beta-client"
-version = "0.2.0"
+version = "0.25.0"
 source = { editable = "../beta_client" }
 dependencies = [
     { name = "pymavlink" },
@@ -21,7 +21,7 @@ provides-extras = ["flight"]
 
 [[package]]
 name = "bullet-app"
-version = "0.2.0"
+version = "0.25.0"
 source = { editable = "." }
 dependencies = [
     { name = "beta-client" },
@@ -300,7 +300,7 @@ wheels = [
 
 [[package]]
 name = "los-tracking"
-version = "0.2.0"
+version = "0.25.0"
 source = { editable = "../los_tracking" }
 dependencies = [
     { name = "pyyaml" },

@@ -1,4 +1,11 @@
-# Release Log — alice branch (changes from 0.1-alpha)
+# Release Log — Integration branch
+
+## 0.25-Integration (changes from 0.2-alice)
+
+### Modified files
+
+- `pyproject.toml`
+  Version bump 0.2.0 → 0.25.0.
 
 ## 0.2-alice (changes from 0.1-alice)
 
